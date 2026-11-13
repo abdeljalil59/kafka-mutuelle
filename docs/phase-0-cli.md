@@ -76,4 +76,25 @@ Pour chaque expérience : commande, résultat observé, enseignement.
   - Logs : 5 lignes `DUPLICATE_BROKER_REGISTRATION` en environ 10 secondes (11:47:20 à 11:47:28 UTC, une toutes les 2 secondes), puis `Kafka Server started` à 11:47:30. Pas de boucle de redémarrage. Les snapshots KRaft reprennent ensuite toutes les 60 minutes.
 - **Explication de l'erreur** : après un arrêt brutal, le contrôleur refuse le nouvel enregistrement du broker tant que la session de l'ancienne incarnation n'a pas expiré, puis l'enregistrement aboutit. Source : ticket Apache KAFKA-19047 (https://mail-archive.com/jira@kafka.apache.org/msg218148.html). Ce ticket traite le cas d'un arrêt propre ; son application à un arrêt brutal est une déduction, non vérifiée dans la documentation officielle.
 - **Enseignement** : la durabilité vient du log sur disque du broker (messages et offsets de groupe). Elle ne tient ici que parce que le conteneur n'a pas été supprimé. Un `docker rm kafka`, ou la recréation du conteneur avec une autre version d'image, effacerait tout puisqu'il n'y a pas de volume nommé ; il faudra en prévoir un dans `infra/docker-compose.yml`. L'ordre n'est garanti qu'à l'intérieur d'une partition, pas entre partitions.
-- **À vérifier** (non fait à ce jour) : comparer le `LOG-END-OFFSET` de chaque partition (attendu 9, 8, 14) avec ce qui a été noté à l'expérience 6, et les premiers messages avec l'expérience 2.
+- **Vérifié le 13/11** : `--describe` du groupe `groupe-demo` après le redémarrage. `LOG-END-OFFSET` 9, 8 et 14 (partitions 0, 1 et 2), identiques à l'expérience 6 ; `CURRENT-OFFSET` identiques, lag à 0, groupe sans consumer actif. Les offsets du groupe (stockés dans `__consumer_offsets`) ont donc eux aussi survécu à l'arrêt brutal, pas seulement les messages.
+
+## 8. Compose avec volume nommé et Kafka UI
+- **Commande** (depuis `infra/`, PowerShell) :
+  ```powershell
+  docker compose config
+  docker compose up -d
+  docker compose ps
+  docker exec kafka ls -la /var/lib/kafka/data
+  docker volume inspect kafka-mutuelle-data
+  # test de recréation, SANS -v
+  docker compose down
+  docker compose up -d
+  docker exec -ti kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic test.persistance --from-beginning --timeout-ms 10000
+  ```
+- **Résultat observé** :
+  - `infra/docker-compose.yml` : `apache/kafka:4.4.0` (KRaft, un nœud) et `ghcr.io/kafbat/kafka-ui:v1.5.0`. Le tag de Kafka UI existe et se télécharge. Interface sur http://localhost:8080 : cluster `local`, 1 broker.
+  - Volume `kafka-mutuelle-data` monté sur `/var/lib/kafka/data` (`KAFKA_LOG_DIRS`). Le broker y écrit sans erreur de droits : les fichiers (`meta.properties`, `__cluster_metadata-0`, checkpoints) appartiennent à `appuser`.
+  - Test de recréation : topic `test.persistance` (3 partitions) et un message créés, puis `docker compose down` et `up -d`. Les conteneurs ont été recréés (heure de création postérieure au premier relevé). Le topic et le message sont toujours présents.
+- **Enseignement** : le volume nommé rend les données indépendantes du conteneur. `docker compose down` les conserve ; `docker compose down -v` supprime le volume et toutes les données. Les messages `ERROR ... TimeoutException` à la fin du consumer sont l'effet attendu de `--timeout-ms` (arrêt après 10 s sans message).
+- **Sources** : exemple officiel https://github.com/apache/kafka/blob/trunk/docker/examples/docker-compose-files/single-node/plaintext/docker-compose.yml ; volumes Docker https://docs.docker.com/engine/storage/volumes/ ; nom de projet Compose https://docs.docker.com/compose/how-tos/project-name/.
+- **Non vérifié dans la documentation** : l'héritage du propriétaire du dossier par un volume vide (la doc Docker ne le dit pas ; constaté ici en pratique). `CLUSTER_ID` est facultatif d'après les scripts de la branche `trunk`, non vérifié sur le tag 4.4.0. La compatibilité de Kafbat UI avec Kafka 4.x n'est pas annoncée dans les pages lues ; constatée ici en pratique avec Kafka 4.4.0.
