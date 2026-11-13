@@ -1,7 +1,7 @@
 # Projet kafka-mutuelle : brief de cadrage
 
 > À donner à Claude CLI comme contexte de départ (ou à renommer `CLAUDE.md` à la racine du dépôt).
-> Statut : **conception validée, aucun code écrit**. Phase 0 (Kafka en ligne de commande) en cours.
+> Statut : **conception validée, aucun code écrit**. Phase 0 : expériences CLI terminées, infrastructure compose à écrire.
 
 ## 1. Objectif
 
@@ -143,11 +143,15 @@ Noter pour chaque expérience : commande, résultat observé, enseignement (fich
 
 ## 9. Prochaines étapes
 
-1. Exécuter la phase 0 et consigner les observations dans `docs/phase-0-cli.md`.
-2. Créer le dépôt Git : `README.md` (objectif, schéma du flux, prérequis Docker/Java 17/Maven, avancement par phase), `.gitignore` (`target/`, `.idea/`, `*.iml`), `docs/`.
-3. **Vérifier dans la documentation officielle** les versions compatibles de Spring Boot, spring-kafka et Kafka, et **figer le tag de l'image Docker** (pas `latest`).
-4. Écrire `infra/docker-compose.yml` (Kafka KRaft + Kafka UI).
-5. Démarrer la phase 1 : créer le parent Maven et `events-contract`, puis `cotisation-service` avec ses tests unitaires.
+**Fait**
+- Phase 0, expériences 1 à 7 exécutées et consignées dans `docs/phase-0-cli.md`.
+- Dépôt Git créé et poussé sur GitHub (compte abdeljalil59, remote `origin`), avec `README.md`, `.gitignore` et `docs/`.
+- Kafka 4.4.0 retenu (image `apache/kafka:4.4.0`, tag figé).
+
+**Reste à faire**
+1. Écrire `infra/docker-compose.yml` : Kafka KRaft (`apache/kafka:4.4.0`), volume nommé pour la persistance, interface web (Kafka UI ou Redpanda Console, à choisir dans la documentation officielle).
+2. **Vérifier dans la documentation officielle** les versions compatibles de Spring Boot et spring-kafka avec Kafka 4.4.0.
+3. Démarrer la phase 1 : parent Maven et `events-contract`, puis `cotisation-service` avec ses tests unitaires.
 
 ## 10. Points ouverts
 

@@ -59,3 +59,21 @@ Pour chaque expérience : commande, résultat observé, enseignement.
 - **Commande** : arrêt du consumer, production de 5 messages (`adh1` ×2, `adh3`, `adh5` ×2), puis `--describe` ; relance du consumer du groupe, puis `--describe`.
 - **Résultat observé** : `Consumer group 'groupe-demo' has no active members.` ; lag de 1, 2 et 2 (`CURRENT-OFFSET` 7, 4, 10 pour `LOG-END-OFFSET` 8, 6, 12). Après relance du consumer, lag à 0 partout. Les offsets de fin finaux (9, 8, 14) montrent qu'un second lot de 5 messages a été produit avant le rattrapage ; l'affichage du consumer relancé n'a pas été conservé.
 - **Enseignement** : lag = `LOG-END-OFFSET` − `CURRENT-OFFSET`. Un groupe sans consumer actif garde ses offsets, et rattrape son retard au redémarrage.
+
+## 7. Persistance après redémarrage
+- **Commande** (PowerShell, après redémarrage de la machine) :
+  ```powershell
+  docker ps -a
+  docker start kafka
+  docker logs kafka --tail 5
+  docker logs kafka 2>&1 | Select-String "DUPLICATE_BROKER_REGISTRATION|Kafka Server started"
+  docker exec -ti kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic cotisations.emises --from-beginning --formatter-property print.key=true --formatter-property print.partition=true --formatter-property print.offset=true
+  ```
+- **Résultat observé** :
+  - Le conteneur `kafka` (`apache/kafka:4.4.0`) existait encore, créé environ 21 heures plus tôt (il n'a donc jamais été supprimé), sans volume nommé.
+  - Relecture depuis le début : 31 messages, offsets continus et sans trou. Partition 0 : offsets 0 à 8 (9 messages) ; partition 1 : 0 à 7 (8 messages) ; partition 2 : 0 à 13 (14 messages).
+  - Clés : `adh3`, `adh4` et `adh6` en partition 0 ; `adh5` en partition 1 ; `adh1` et `adh2` en partition 2. Une même clé reste dans la même partition, et plusieurs clés peuvent partager une partition.
+  - Logs : 5 lignes `DUPLICATE_BROKER_REGISTRATION` en environ 10 secondes (11:47:20 à 11:47:28 UTC, une toutes les 2 secondes), puis `Kafka Server started` à 11:47:30. Pas de boucle de redémarrage. Les snapshots KRaft reprennent ensuite toutes les 60 minutes.
+- **Explication de l'erreur** : après un arrêt brutal, le contrôleur refuse le nouvel enregistrement du broker tant que la session de l'ancienne incarnation n'a pas expiré, puis l'enregistrement aboutit. Source : ticket Apache KAFKA-19047 (https://mail-archive.com/jira@kafka.apache.org/msg218148.html). Ce ticket traite le cas d'un arrêt propre ; son application à un arrêt brutal est une déduction, non vérifiée dans la documentation officielle.
+- **Enseignement** : la durabilité vient du log sur disque du broker (messages et offsets de groupe). Elle ne tient ici que parce que le conteneur n'a pas été supprimé. Un `docker rm kafka`, ou la recréation du conteneur avec une autre version d'image, effacerait tout puisqu'il n'y a pas de volume nommé ; il faudra en prévoir un dans `infra/docker-compose.yml`. L'ordre n'est garanti qu'à l'intérieur d'une partition, pas entre partitions.
+- **À vérifier** (non fait à ce jour) : comparer le `LOG-END-OFFSET` de chaque partition (attendu 9, 8, 14) avec ce qui a été noté à l'expérience 6, et les premiers messages avec l'expérience 2.
