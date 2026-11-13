@@ -1,7 +1,7 @@
 # Projet kafka-mutuelle : brief de cadrage
 
 > À donner à Claude CLI comme contexte de départ (ou à renommer `CLAUDE.md` à la racine du dépôt).
-> Statut : **conception validée, aucun code écrit**. Phase 0 : expériences CLI terminées, infrastructure compose à écrire.
+> Statut : **conception validée, aucun code applicatif écrit**. Phase 0 terminée (expériences CLI et infrastructure compose). Phase 1 à démarrer.
 
 ## 1. Objectif
 
@@ -144,14 +144,18 @@ Noter pour chaque expérience : commande, résultat observé, enseignement (fich
 ## 9. Prochaines étapes
 
 **Fait**
-- Phase 0, expériences 1 à 7 exécutées et consignées dans `docs/phase-0-cli.md`.
+- Phase 0, expériences 1 à 8 exécutées et consignées dans `docs/phase-0-cli.md` (CLI, persistance après redémarrage, compose avec volume nommé).
 - Dépôt Git créé et poussé sur GitHub (compte abdeljalil59, remote `origin`), avec `README.md`, `.gitignore` et `docs/`.
 - Kafka 4.4.0 retenu (image `apache/kafka:4.4.0`, tag figé).
+- `infra/docker-compose.yml` : Kafka KRaft (un nœud) avec volume nommé `kafka-mutuelle-data`, et Kafka UI (`ghcr.io/kafbat/kafka-ui:v1.5.0`, http://localhost:8080). Persistance prouvée par recréation des conteneurs sans `-v`.
 
 **Reste à faire**
-1. Écrire `infra/docker-compose.yml` : Kafka KRaft (`apache/kafka:4.4.0`), volume nommé pour la persistance, interface web (Kafka UI ou Redpanda Console, à choisir dans la documentation officielle).
-2. **Vérifier dans la documentation officielle** les versions compatibles de Spring Boot et spring-kafka avec Kafka 4.4.0.
-3. Démarrer la phase 1 : parent Maven et `events-contract`, puis `cotisation-service` avec ses tests unitaires.
+1. **Vérifier dans la documentation officielle** les versions compatibles de Spring Boot et spring-kafka avec Kafka 4.4.0.
+2. Démarrer la phase 1 : parent Maven et `events-contract`, puis `cotisation-service` avec ses tests unitaires.
+
+**À retenir**
+- `docker compose down -v` supprime le volume `kafka-mutuelle-data` et toutes les données. Utiliser `docker compose down` seul.
+- Les anciens conteneurs `kafka-phase0` et `bdcc-*` sont arrêtés et ne doivent pas être touchés.
 
 ## 10. Points ouverts
 
