@@ -156,4 +156,3 @@ Noter pour chaque expérience : commande, résultat observé, enseignement (fich
 ## 10. Points ouverts
 
 - Choix de l'exporter de lag Kafka pour Prometheus (kafka-exporter ou JMX exporter) : à trancher dans la doc en phase 4.
-- Image `apache/kafka` (JVM) ou `apache/kafka-native` (démarrage plus rapide, moins de mémoire) : à choisir au moment du `docker-compose.yml`.
