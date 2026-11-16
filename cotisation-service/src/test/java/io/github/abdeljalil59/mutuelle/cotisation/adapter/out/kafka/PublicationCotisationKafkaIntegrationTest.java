@@ -83,16 +83,16 @@ class PublicationCotisationKafkaIntegrationTest {
 
             JsonNode json = JSON.readTree(message.value());
             assertThat(json.propertyNames())
-                    .containsExactlyInAnyOrder("idEvenement", "idAdherent", "montant", "emisLe");
+                    .containsExactlyInAnyOrder("idEvenement", "idAdherent", "montant", "emiseLe");
             assertThat(UUID.fromString(json.get("idEvenement").asString())).isNotNull();
             assertThat(json.get("idAdherent").asString()).isEqualTo("adh1");
             // Format constaté puis figé : montant en nombre JSON avec son échelle,
-            // emisLe en chaîne ISO-8601 (et non en nombre epoch).
+            // emiseLe en chaîne ISO-8601 (et non en nombre epoch).
             assertThat(json.get("montant").isNumber()).isTrue();
             assertThat(json.get("montant").decimalValue()).isEqualByComparingTo("50.00");
             assertThat(message.value()).contains("\"montant\":50.00");
-            assertThat(json.get("emisLe").isString()).isTrue();
-            assertThat(json.get("emisLe").asString()).isEqualTo("2026-11-16T10:00:00Z");
+            assertThat(json.get("emiseLe").isString()).isTrue();
+            assertThat(json.get("emiseLe").asString()).isEqualTo("2026-11-16T10:00:00Z");
         }
     }
 
