@@ -24,3 +24,6 @@ mutuelle:
     kafka:
       topic: cotisations.emises
       delai-publication-ms: 10000
+
+server:
+  port: 8081  # 8080 est occupé par Kafka UI (compose)
