@@ -28,8 +28,8 @@ cotisation-service ──► cotisations.emises ──► prelevement-service �
 
 | Phase | Contenu | Statut |
 |---|---|---|
-| 0 | Kafka en CLI (Docker) + Kafka UI | En cours |
-| 1 | Producer et consumer Spring, tests unitaires | À faire |
+| 0 | Kafka en CLI (Docker) + Kafka UI | Terminée |
+| 1 | Producer et consumer Spring, tests unitaires | En cours |
 | 2 | Clés, rebalancing, plusieurs instances | À faire |
 | 3 | Idempotence, retries, DLT | À faire |
 | 4 | Prometheus puis Grafana | À faire |
@@ -37,4 +37,4 @@ cotisation-service ──► cotisations.emises ──► prelevement-service �
 | 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | À faire |
 | 7 | Tests d'intégration complets, éventuellement ELK | À faire |
 
-Journal d'apprentissage : [`docs/`](docs/).
+Journal d'apprentissage : [`docs/`](docs/). Versions retenues : [`docs/versions.md`](docs/versions.md).
