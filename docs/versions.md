@@ -32,7 +32,7 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`. E
 - Dépendances réellement résolues : `mvn -B dependency:tree -pl cotisation-service`.
 
 ## Compatibilité client 4.2.2 et broker 4.4.0
-- **Constatée pour les seules API utilisées** (étape 4b, voir [phase-1-producteur.md](phase-1-producteur.md), section 6) : le client 4.2.2 a créé ou utilisé le topic et envoyé 7 messages stockés par le broker 4.4.0, lus par les outils CLI et par Kafka UI. Aucune page de documentation lue ne la confirme.
+- **Constatée pour les seules API utilisées** (étape 4b, voir [phase-1-producteur.md](phase-1-producteur.md), section 6) : le client 4.2.2 a initialisé un producteur idempotent (ProducerId attribué), créé ou utilisé le topic et envoyé 7 messages stockés par le broker 4.4.0, lus par les outils CLI et par Kafka UI. Aucune page de documentation lue ne la confirme.
 - **Non prouvé** : le reste du protocole, dont la lecture de messages par un client 4.2.2, les groupes de consommateurs et les transactions.
 
 ## Non vérifié

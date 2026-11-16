@@ -84,7 +84,7 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
   - Via `PublicationCotisationKafka` : `PublicationImpossibleException` après 1007 ms, cause : la `KafkaException` de Spring, cause : le `TimeoutException` de Kafka.
   - Aucun future en échec : l'appelant n'obtient jamais de `CompletableFuture` dans ce cas.
 - **Figé dans le test** : l'exception est synchrone, sa chaîne de causes contient le `TimeoutException` de Kafka, la durée est entre 900 et 5000 ms. Les messages des bibliothèques ne sont pas figés (ils changeront avec les versions).
-- **Déduit** : `send()` lève avant d'avoir accepté le record, donc le message n'a pas été écrit. À distinguer du `TimeoutException` de `get(...)` (section 2), où le message a pu être écrit. Cela n'a pas été constaté sur un broker.
+- **Déduit, puis constaté sur un broker réel (section 7)** : `send()` lève avant d'avoir accepté le record, donc le message n'a pas été écrit : deux requêtes en échec par ce chemin, messages absents du topic. À distinguer du `TimeoutException` de `get(...)` (section 2), où le message a pu être écrit (non exercé).
 - **Non vérifié** :
   - Si « Send failed » est créé par le producteur ou par `KafkaTemplate`.
   - Le comportement avec un broker joignable mais sans le topic.
@@ -96,7 +96,7 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
 - **Erreurs** (`ProblemDetail`) : `CotisationInvalideException` donne 400 ; `PublicationImpossibleException` donne 503 ; un JSON mal formé donne 400 (constaté, le cas d'usage n'est pas appelé).
 - **Constaté** : la réponse 201 conserve l'échelle du montant (`"montant":50.00`, lu sur le texte brut), avec le mapper de Spring MVC. Ce n'est pas le mapper du sérialiseur Kafka (section 3) : aucun lien n'est démontré entre les deux.
 - **Le 503 peut cacher un message déjà publié** : il couvre deux situations qu'un client ne peut pas distinguer.
-  - Échec constaté : future en échec, ou exception synchrone de `send()` quand les métadonnées sont indisponibles (section 4). Le message n'est alors pas écrit (déduit).
+  - Échec constaté : future en échec, ou exception synchrone de `send()` quand les métadonnées sont indisponibles (section 4). Le message n'est alors pas écrit (constaté pour l'exception synchrone, section 7 ; non exercé pour le futur en échec).
   - Délai de publication dépassé (`TimeoutException` de `get(...)`) : le producteur a pu écrire le message après l'abandon. Un client qui rejoue sa requête risque un doublon. Le texte du 503 le dit (« la cotisation a peut-être été publiée »). La protection (déduplication côté consommateur) viendra en phase 3.
 - **L'appel REST est bloquant** : la requête HTTP occupe un fil Tomcat jusqu'à la fin de la publication. Durée maximale : environ 14 s (`max.block.ms` 5 s + `delivery.timeout.ms` 9 s), cohérent avec la section 2 ; **déduit, non mesuré**. Si les métadonnées arrivent après 4 s, `send()` réussit et l'attente du future peut encore durer jusqu'à `delivery.timeout.ms` (9 s). Le délai applicatif de 10 s ne borne rien tant que `delivery.timeout.ms` (9 s) est plus court. Beaucoup de requêtes simultanées avec un Kafka lent peuvent épuiser les fils de Tomcat.
 - **Non vérifié** : la valeur par défaut du port (8080) n'a été lue qu'en résumé de page ; le port 8081 est fixé dans `application.yml` (constaté à l'étape 4b : `Tomcat started on port 8081`). Le comportement de bout en bout sur le broker du compose et la compatibilité du client 4.2.2 avec le broker 4.4.0 sont traités à la section 6.
@@ -127,7 +127,7 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
     | `adh6` | 0,028185 s |
 
     Soit **19 à 40 ms**. **Déduit** : comme l'adaptateur attend l'acquittement de Kafka avant de répondre, ces durées incluent l'aller-retour vers le broker.
-  - La première requête (cas nominal) n'a pas été chronométrée : l'hypothèse « plus lente que les suivantes » (initialisation du producteur, métadonnées) n'est ni confirmée ni infirmée.
+  - La première requête (cas nominal) n'a pas été chronométrée, mais ses logs la bornent : `emiseLe` à 10:53:40.211 et `ProducerId set to 1000 with epoch 0` à 10:53:40.574, donc **au moins environ 0,36 s** (contre 19 à 40 ms ensuite). **Déduit** : l'envoi attend l'identifiant du producteur idempotent.
 - **Constaté, requêtes invalides** (aucun message produit : le topic contient exactement 7 messages, le cas nominal plus les six adhérents) :
 
   | Cas | Statut | Format | Corps |
@@ -137,7 +137,7 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
   | `idAdherent` absent | 400 | `application/problem+json` | `{"detail":"idAdherent ne doit pas être null","instance":"/cotisations","status":400,"title":"Cotisation invalide"}` |
   | JSON mal formé | 400 | `application/json` (format d'erreur par défaut de Spring) | `{"timestamp":"2026-11-16T09:54:01.528Z","status":400,"error":"Bad Request","path":"/cotisations"}` |
 
-  Les trois cas du domaine passent par `GestionErreursRest` (`ProblemDetail`, sans champ `type`). Le JSON mal formé échoue avant le contrôleur et sort au format Spring par défaut. L'API a donc **deux formats d'erreur**. Cas du champ absent : la déduction de l'étape 4a (400 par `CotisationInvalideException`) est confirmée.
+  Les trois cas du domaine passent par `GestionErreursRest` (`ProblemDetail`, sans champ `type`). Le JSON mal formé échoue avant le contrôleur et sort au format Spring par défaut (constaté dans les logs : `DefaultHandlerExceptionResolver : Resolved [HttpMessageNotReadableException: JSON parse error: Unrecognized token ...]`, 10:54:01.506). L'API a donc **deux formats d'erreur**. Cas du champ absent : la déduction de l'étape 4a (400 par `CotisationInvalideException`) est confirmée.
 - **Constaté, JSON réel côté broker 4.4.0** (`console-consumer --from-beginning --timeout-ms 10000`, avec `print.headers`) :
   ```
   Partition:2  Offset:0  NO_HEADERS  adh1  {"idEvenement":"63f8e136-814d-4bf1-9631-bc4a67a40ce4","idAdherent":"adh1","montant":50.00,"emisLe":"2026-11-16T09:53:40.211861200Z"}
@@ -168,7 +168,57 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
   - Entre partitions, il n'y a **pas d'ordre global** : la sortie du consommateur n'est pas dans l'ordre d'envoi (`adh5`, envoyé à …53.369, est affiché avant `adh3`, envoyé à …53.230).
 - **Compatibilité du client 4.2.2 avec le broker 4.4.0, pour les API utilisées seulement** :
   - **Établi** : le client 4.2.2 (log `Kafka version: 4.2.2`) a travaillé avec le broker 4.4.0 : le topic existe avec 3 partitions, 7 messages envoyés par l'application y sont stockés, lus par les outils CLI et par Kafka UI.
-  - **Déduit, non tracé** : les API utilisées sont les appels de version, de métadonnées, de création de topic (`KafkaAdmin`), d'initialisation du producteur et d'envoi (l'idempotence est activée par défaut, d'après la documentation Kafka 4.2 lue à la section 2). Les requêtes réellement échangées n'ont pas été relevées.
+  - **Constaté dans le log du producteur** (10:53:40) : `enable.idempotence = true`, `acks = -1`, `Instantiated an idempotent producer`, `ProducerId set to 1000 with epoch 0` (l'initialisation du producteur idempotent a abouti contre le broker 4.4.0), et `Cluster ID: 4L6g3nShT-eMCtK--X86sw` (celui du compose).
+  - **Déduit, non tracé** : la création du topic par `KafkaAdmin`. Les requêtes réellement échangées n'ont pas été relevées.
   - **Non établi** : la lecture de messages par un client 4.2.2 (le consommateur est l'outil CLI du broker), les groupes de consommateurs, les transactions, et le reste du protocole.
 - **Écart de nommage** : le champ de la réponse REST s'appelle `emiseLe` (`CotisationReponse`, objet du domaine) et celui du message Kafka `emisLe` (`CotisationEmise`, contrat partagé). Les deux contrats sont indépendants, mais un client qui lit les deux doit connaître l'écart. À trancher : l'aligner, ou le laisser tel quel.
-- **Non constaté** : le scénario 503 réel (pas encore joué), le comportement sous charge, le lag.
+- **Non constaté** : le comportement sous charge, le lag. Le scénario 503 réel est consigné à la section 7.
+
+## 7. Scénario 503 réel : broker arrêté, producteur déjà chaud (étape 4b)
+- **Contexte** (16/11/2026, heure locale +01:00) : producteur déjà chaud (7 messages envoyés à 10:53, section 6), broker du compose arrêté puis redémarré, application non redémarrée.
+- **Constaté, configuration du producteur** (log au premier envoi, 10:53:40.235) : `acks = -1`, `enable.idempotence = true`, `linger.ms = 5`, `request.timeout.ms = 5000`, `delivery.timeout.ms = 9000`, `max.block.ms = 5000`, `retries = 2147483647`, `metadata.recovery.strategy = rebootstrap`, `metadata.recovery.rebootstrap.trigger.ms = 300000`, `key.serializer = StringSerializer`, `value.serializer = JacksonJsonSerializer`.
+- **Infirmé** : ma déduction « environ 9 s, par le futur, après `delivery.timeout.ms` » (producteur chaud, métadonnées en cache, lot expirant à `delivery.timeout.ms`). Relevé de l'utilisateur : 5,07 s et 5,02 s, sans futur en échec.
+- **Constaté, panne** :
+  ```
+  11:11:09.261 INFO NetworkClient : [Producer clientId=producer-1] Node 1 disconnected.
+  11:11:09.263 INFO Metadata : [Producer clientId=producer-1] Rebootstrapping with [localhost/127.0.0.1:9092]
+  11:11:09.271 INFO NetworkClient : Node -1 disconnected. / Cancelled in-flight API_VERSIONS request ... (request timeout: 5000ms)
+  11:11:09.276 WARN NetworkClient : Bootstrap broker localhost:9092 (id: -1 rack: null isFenced: false) disconnected
+  ```
+  Ces lignes se répètent environ une par seconde ; 118 lignes « Connection to node -1 (localhost/127.0.0.1:9092) could not be established. Node may not be available. » dans tout le log (comptage de l'utilisateur).
+- **Constaté, chemin pris : exception synchrone de `send()`**, même signature qu'à l'étape 3c (section 4) :
+  ```
+  11:12:03.011 ERROR LoggingProducerListener : Exception thrown when sending a message with key='adh1' ... to topic cotisations.emises:
+  org.apache.kafka.common.errors.TimeoutException: Topic cotisations.emises not present in metadata after 5000 ms.
+  11:12:03.021 ERROR GestionErreursRest : Publication impossible
+  PublicationImpossibleException: Échec de la publication de la cotisation de adh1
+    at PublicationCotisationKafka.publier(PublicationCotisationKafka.java:53)
+    at EmettreCotisation.emettre(EmettreCotisation.java:20)
+  Caused by: org.springframework.kafka.KafkaException: Send failed
+    at KafkaTemplate.doSend(KafkaTemplate.java:876) / observeSend(:833) / send(:609)
+    at PublicationCotisationKafka.publier(PublicationCotisationKafka.java:36)
+  Caused by: org.apache.kafka.common.errors.TimeoutException: Topic cotisations.emises not present in metadata after 5000 ms.
+  ```
+  La requête 2 (`adh2`, 88.00) donne la même chaîne (11:12:14.532 et .534). La ligne 36 est l'appel `kafkaTemplate.send(...)` ; la ligne 53 est le `throw` de la branche `catch (RuntimeException)`.
+- **Cause racine** : `TimeoutException` de Kafka, « Topic cotisations.emises not present in metadata after 5000 ms ».
+- **Ce que la trace établit sur les délais** :
+  - **Constaté** : aucun `ExecutionException` ni `KafkaProducerException` : aucun futur n'a échoué. Ni `request.timeout.ms` ni `delivery.timeout.ms` n'a fait échouer la requête.
+  - **Déduit** : ce `TimeoutException` correspond à `max.block.ms`. Cette déduction s'appuie sur la Javadoc de `send()` (section 1 : `send()` bloque jusqu'à `max.block.ms` en attente des métadonnées) et sur le message « after 5000 ms », pas sur la lecture du code.
+  - `request.timeout.ms` et `max.block.ms` valent tous les deux 5000 : la durée seule (5,07 s et 5,02 s) ne les distinguait pas. C'est la trace (exception levée par `send()`, pas de futur) qui tranche entre les deux chemins.
+  - Le `(request timeout: 5000ms)` de 11:11:09.271 concerne une requête `API_VERSIONS` annulée à la déconnexion, hors du chemin de `send()`.
+- **Pourquoi le producteur chaud n'avait plus de métadonnées** :
+  - **Constaté** : `Node 1 disconnected` puis `Rebootstrapping` 2 ms après, avec `metadata.recovery.strategy = rebootstrap`.
+  - **Déduit** : les métadonnées du topic sont abandonnées à la coupure, d'où l'attente de `send()`.
+  - **Non expliqué** : le rebootstrap immédiat, alors que `metadata.recovery.rebootstrap.trigger.ms` vaut 300000.
+- **Constaté, reprise automatique** (sans redémarrer l'application) :
+  ```
+  11:13:16.575 INFO Metadata : Rebootstrapping with [localhost/127.0.0.1:9092]
+  11:13:16.681 INFO Metadata : [Producer clientId=producer-1] Cluster ID: 4L6g3nShT-eMCtK--X86sw
+  ```
+  Même `Cluster ID` que celui du premier envoi (10:53:40.414) et que le `CLUSTER_ID` du compose, 106 ms après le début de la reprise.
+- **Relevé de l'utilisateur, 503** : durées de 5,07 s et 5,02 s ; 7 messages dans le topic avant et après la panne ; les messages `99.00` et `88.00` sont absents. Ces deux 503 n'ont donc rien publié (les sorties brutes de `curl` et du consommateur ne sont pas reproduites ici).
+- **À noter, double journalisation** : l'erreur est écrite deux fois, par `LoggingProducerListener` (Spring Kafka) puis par `GestionErreursRest`, à 10 ms d'écart. Aucune action pour l'instant.
+- **Non exercé** :
+  - Le cas « délai dépassé après envoi » (`TimeoutException` de `get(...)`), seul cas où le message peut avoir été publié malgré le 503.
+  - Le chemin du futur en échec, donc la déduction « Kafka renonce avant nous » (option B des délais, section 2).
+  - Le démarrage à froid avec broker arrêté (chemin B).
