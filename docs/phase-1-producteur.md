@@ -1,0 +1,48 @@
+# Phase 1 : producteur Kafka (`cotisation-service`)
+
+Environnement : Spring Boot 4.1.2, spring-kafka 4.1.2, kafka-clients 4.2.2 (versions : voir [versions.md](versions.md)), broker `apache/kafka:4.4.0` du compose.
+Étape documentée : 3a (adaptateur Kafka de publication, tests unitaires). Les preuves sur un vrai broker viennent à l'étape 3b.
+
+Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **déduit**.
+
+## 1. Comportement de `send()` quand les métadonnées sont indisponibles
+- **Vérifié (documentation)** : Javadoc de [`KafkaProducer` 4.2](https://kafka.apache.org/42/javadoc/org/apache/kafka/clients/producer/KafkaProducer.html).
+  - `send()` est asynchrone et rend la main tout de suite, mais « it will block for up to `max.block.ms` milliseconds while waiting for topic's metadata ».
+  - Section Throws : `TimeoutException` « if the topic or the partition specified in the record cannot be found in metadata within `max.block.ms` », et `InterruptException`.
+  - Le « failed future » de la Javadoc ne concerne que le buffer plein.
+  - `max.block.ms` borne « the total time waiting for both metadata fetch and buffer allocation » ([producer-configs](https://kafka.apache.org/42/configuration/producer-configs/)).
+- **Vérifié (bytecode, jars locaux, `javap -c`)** :
+  - `KafkaProducer.doSend` (kafka-clients 4.2.2) attrape `ApiException` et crée un `KafkaProducer$FutureFailure`, c'est-à-dire un future en échec.
+  - Il convertit `InterruptedException` en `InterruptException`, levée de façon synchrone. Les trois constructeurs de `InterruptException` appellent `Thread.currentThread().interrupt()` : le statut d'interruption est remis par Kafka.
+  - `KafkaTemplate.observeSend` (spring-kafka 4.1.2) contient un handler pour `RuntimeException`.
+- **Déduit** :
+  - `TimeoutException` est une `ApiException` (la Javadoc la dit réessayable). L'échec de métadonnées arriverait donc plutôt en future en échec, contrairement à ce que dit la section Throws de la Javadoc. Le bytecode et la Javadoc divergent ; je n'ai pas lu le code source.
+- **Non vérifié** :
+  - Ce que fait le handler `RuntimeException` de `KafkaTemplate.observeSend` (relance synchrone ou non).
+  - Le comportement réel avec un broker injoignable : aucun test sur un vrai broker à ce jour.
+- **Conséquence dans le code** : `PublicationCotisationKafka` protège les deux côtés. Les échecs du future (`ExecutionException`), le délai dépassé (`TimeoutException`), l'interruption et les `RuntimeException` levées par `send()` sont tous enveloppés dans `PublicationImpossibleException`. Un cas nominal et quatre cas d'échec sont couverts par des tests unitaires (Mockito sur `KafkaTemplate`), qui prouvent la conversion d'exceptions mais rien du comportement réel de Kafka.
+
+## 2. Délais du producteur
+- **Vérifié (valeurs par défaut, Kafka 4.2)** : [producer-configs](https://kafka.apache.org/42/configuration/producer-configs/).
+
+  | Propriété | Défaut | Rôle |
+  |---|---|---|
+  | `delivery.timeout.ms` | 120000 (2 min) | « An upper bound on the time to report success or failure after a call to `send()` returns » |
+  | `request.timeout.ms` | 30000 (30 s) | Attente maximale de la réponse à une requête |
+  | `linger.ms` | 5 | Attente pour regrouper des records dans un batch |
+  | `max.block.ms` | 60000 (1 min) | Blocage dans `send()` (métadonnées, buffer) |
+  | `retries` | 2147483647 | La doc recommande de piloter les retries par `delivery.timeout.ms` |
+  | `acks` | `all` | |
+  | `enable.idempotence` | `true` | |
+
+  La page 4.4 n'a pas été lue.
+- **Vérifié (contrainte)** : `delivery.timeout.ms` devrait être supérieur ou égal à `request.timeout.ms` + `linger.ms`. Aucune erreur de configuration explicite trouvée dans la page.
+- **Valeurs choisies** (`application.yml`) : `request.timeout.ms` 5000, `delivery.timeout.ms` 9000, `max.block.ms` 5000, avec un délai applicatif de 10 s (`mutuelle.cotisation.kafka.delai-publication-ms`).
+  - Contrainte respectée : 9000 ≥ 5000 + 5.
+  - Raison : le délai de 10 s de l'appelant démarre au retour de `send()`. `request.timeout.ms` et `delivery.timeout.ms` sont sous ce délai, donc Kafka renonce avant nous. L'échec vient alors du producteur, pas de notre timeout.
+- **Déduit** :
+  - Aucun envoi ne continue en arrière-plan après l'abandon de l'appelant. Cela n'a jamais été constaté sur un vrai broker.
+  - `max.block.ms` joue dans `send()`, avant le future, donc hors des 10 s. Pire cas d'un appel : 5 s + 9 s = environ 14 s. C'est un calcul à partir des définitions, non une mesure.
+  - Ces trois valeurs sont de mon choix (« option B »), elles ne viennent pas de la documentation.
+- **Vérifié (risque de doublon)** : Javadoc de `KafkaProducer` : « it is imperative to avoid application level re-sends since these cannot be de-duplicated » ; l'idempotence ne vaut que « within a single session ». Entrée `enable.idempotence` : « If 'false', producer retries due to broker failures, etc., may write duplicates ».
+- **Déduit** : le `TimeoutException` de `get(10, SECONDS)` est celui de `java.util.concurrent` : il veut dire « nous avons cessé d'attendre », pas « le message n'est pas écrit ». Avec les défauts de Kafka (120 s), le producteur aurait pu écrire le message après notre abandon. Avec les valeurs choisies ci-dessus, cet écart est fermé côté producteur, mais un retry applicatif reste risqué sans déduplication côté consommateur (phase 3).

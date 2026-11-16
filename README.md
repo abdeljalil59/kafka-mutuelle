@@ -37,4 +37,4 @@ cotisation-service ──► cotisations.emises ──► prelevement-service �
 | 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | À faire |
 | 7 | Tests d'intégration complets, éventuellement ELK | À faire |
 
-Journal d'apprentissage : [`docs/`](docs/). Versions retenues : [`docs/versions.md`](docs/versions.md).
+Journal d'apprentissage : [`docs/`](docs/) : [phase 0, Kafka en CLI](docs/phase-0-cli.md), [phase 1, producteur](docs/phase-1-producteur.md). Versions retenues : [`docs/versions.md`](docs/versions.md).
