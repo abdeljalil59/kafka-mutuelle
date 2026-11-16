@@ -31,8 +31,11 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`. E
 - Versions gérées par le BOM : https://docs.spring.io/spring-boot/appendix/dependency-versions/coordinates.html
 - Dépendances réellement résolues : `mvn -B dependency:tree -pl cotisation-service`.
 
+## Compatibilité client 4.2.2 et broker 4.4.0
+- **Constatée pour les seules API utilisées** (étape 4b, voir [phase-1-producteur.md](phase-1-producteur.md), section 6) : le client 4.2.2 a créé ou utilisé le topic et envoyé 7 messages stockés par le broker 4.4.0, lus par les outils CLI et par Kafka UI. Aucune page de documentation lue ne la confirme.
+- **Non prouvé** : le reste du protocole, dont la lecture de messages par un client 4.2.2, les groupes de consommateurs et les transactions.
+
 ## Non vérifié
-- **Client 4.2.2 et broker 4.4.0** : aucune page lue ne confirme la compatibilité. À prouver par un test d'intégration contre le broker du compose (étape 3b de `cotisation-service`).
 - **Broker embarqué** : `@EmbeddedKafka` démarre un broker 4.2.2, pas 4.4.0.
 - **Format JSON réel** : le format produit pour `Instant` et `BigDecimal` par `JacksonJsonSerializer` n'est pas encore lu sur un message (étape 3b). La documentation spring-kafka (https://docs.spring.io/spring-kafka/reference/kafka/serdes.html) cite `JacksonJsonSerializer` sans préciser la version de Jackson ; c'est le jar qui l'a établie (voir le tableau).
 - **Fin de support de Spring Boot 4.1** : dates non trouvées dans les pages lues.

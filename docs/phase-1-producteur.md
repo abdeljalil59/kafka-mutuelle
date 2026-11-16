@@ -99,4 +99,76 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
   - Échec constaté : future en échec, ou exception synchrone de `send()` quand les métadonnées sont indisponibles (section 4). Le message n'est alors pas écrit (déduit).
   - Délai de publication dépassé (`TimeoutException` de `get(...)`) : le producteur a pu écrire le message après l'abandon. Un client qui rejoue sa requête risque un doublon. Le texte du 503 le dit (« la cotisation a peut-être été publiée »). La protection (déduplication côté consommateur) viendra en phase 3.
 - **L'appel REST est bloquant** : la requête HTTP occupe un fil Tomcat jusqu'à la fin de la publication. Durée maximale : environ 14 s (`max.block.ms` 5 s + `delivery.timeout.ms` 9 s), cohérent avec la section 2 ; **déduit, non mesuré**. Si les métadonnées arrivent après 4 s, `send()` réussit et l'attente du future peut encore durer jusqu'à `delivery.timeout.ms` (9 s). Le délai applicatif de 10 s ne borne rien tant que `delivery.timeout.ms` (9 s) est plus court. Beaucoup de requêtes simultanées avec un Kafka lent peuvent épuiser les fils de Tomcat.
-- **Non vérifié** : le comportement de bout en bout sur le broker du compose (étape 4b), y compris la compatibilité du client 4.2.2 avec le broker 4.4.0. La valeur par défaut du port (8080) n'a été lue qu'en résumé de page ; le port 8081 est fixé dans `application.yml`.
+- **Non vérifié** : la valeur par défaut du port (8080) n'a été lue qu'en résumé de page ; le port 8081 est fixé dans `application.yml` (constaté à l'étape 4b : `Tomcat started on port 8081`). Le comportement de bout en bout sur le broker du compose et la compatibilité du client 4.2.2 avec le broker 4.4.0 sont traités à la section 6.
+
+## 6. Démarrage de bout en bout contre le broker du compose (étape 4b)
+- **Environnement** (16/11/2026) : jar exécutable `cotisation-service-0.1.0-SNAPSHOT.jar` (construit par `mvn -B -pl cotisation-service -am package -DskipTests`), lancé par `java -jar` sur JDK 22, port 8081. Broker `apache/kafka:4.4.0` du compose (`kafka`, `kafka-ui`, volume `kafka-mutuelle-data`). Versions résolues : voir [versions.md](versions.md).
+- **Constaté, démarrage de l'application** :
+  ```
+  10:51:41.320 INFO AppInfoParser : Kafka version: 4.2.2
+  10:51:42.399 INFO TomcatWebServer : Tomcat started on port 8081 (http) with context path '/'
+  10:51:42.408 INFO CotisationServiceApplication : Started CotisationServiceApplication in 3.483 seconds
+  ```
+  La ligne `Kafka version: 4.2.2` (client) apparaît avant `Tomcat started`, donc avant toute requête. **Déduit** : elle vient du client d'administration que `KafkaAdmin` crée au démarrage.
+- **Constaté, broker** : `[2026-11-13 14:57:06,174] INFO Kafka version: 4.4.0` (log de démarrage du broker, recréé le 13/11 par le compose).
+- **Constaté, topic** : `kafka-topics --describe` donne `cotisations.emises`, `PartitionCount: 3`, `ReplicationFactor: 1`, `min.insync.replicas=1`, `Leader: 1 / Isr: 1` pour les partitions 0, 1 et 2. Kafka UI : 3 partitions, réplication 1, 7 messages, offsets suivants 3, 1 et 3 pour les partitions 0, 1 et 2.
+- **Déduit, topic créé par l'application** : le topic n'existait pas sur ce broker avant le démarrage (le volume est neuf depuis l'étape du compose, seul `test.persistance` y avait été créé à la main) et sa configuration (3 partitions, 1 réplique) est celle du bean `NewTopic`. La création elle-même n'a pas été constatée dans les logs.
+- **Constaté, requêtes valides** (`curl`) :
+  - Cas nominal (`curl -i`, non chronométré) : `HTTP/1.1 201`, `Content-Type: application/json`, `Content-Length: 80`, corps `{"idAdherent":"adh1","montant":50.00,"emiseLe":"2026-11-16T09:53:40.211861200Z"}`.
+  - Six adhérents, tous en 201 :
+
+    | Adhérent | Durée |
+    |---|---|
+    | `adh1` (12.50) | 0,040366 s |
+    | `adh2` | 0,019365 s |
+    | `adh3` | 0,021230 s |
+    | `adh4` | 0,035825 s |
+    | `adh5` | 0,024890 s |
+    | `adh6` | 0,028185 s |
+
+    Soit **19 à 40 ms**. **Déduit** : comme l'adaptateur attend l'acquittement de Kafka avant de répondre, ces durées incluent l'aller-retour vers le broker.
+  - La première requête (cas nominal) n'a pas été chronométrée : l'hypothèse « plus lente que les suivantes » (initialisation du producteur, métadonnées) n'est ni confirmée ni infirmée.
+- **Constaté, requêtes invalides** (aucun message produit : le topic contient exactement 7 messages, le cas nominal plus les six adhérents) :
+
+  | Cas | Statut | Format | Corps |
+  |---|---|---|---|
+  | `montant` 0 | 400 | `application/problem+json` | `{"detail":"montant doit être strictement positif","instance":"/cotisations","status":400,"title":"Cotisation invalide"}` |
+  | `idAdherent` vide | 400 | `application/problem+json` | `{"detail":"idAdherent ne doit pas être vide","instance":"/cotisations","status":400,"title":"Cotisation invalide"}` |
+  | `idAdherent` absent | 400 | `application/problem+json` | `{"detail":"idAdherent ne doit pas être null","instance":"/cotisations","status":400,"title":"Cotisation invalide"}` |
+  | JSON mal formé | 400 | `application/json` (format d'erreur par défaut de Spring) | `{"timestamp":"2026-11-16T09:54:01.528Z","status":400,"error":"Bad Request","path":"/cotisations"}` |
+
+  Les trois cas du domaine passent par `GestionErreursRest` (`ProblemDetail`, sans champ `type`). Le JSON mal formé échoue avant le contrôleur et sort au format Spring par défaut. L'API a donc **deux formats d'erreur**. Cas du champ absent : la déduction de l'étape 4a (400 par `CotisationInvalideException`) est confirmée.
+- **Constaté, JSON réel côté broker 4.4.0** (`console-consumer --from-beginning --timeout-ms 10000`, avec `print.headers`) :
+  ```
+  Partition:2  Offset:0  NO_HEADERS  adh1  {"idEvenement":"63f8e136-814d-4bf1-9631-bc4a67a40ce4","idAdherent":"adh1","montant":50.00,"emisLe":"2026-11-16T09:53:40.211861200Z"}
+  Partition:2  Offset:1  NO_HEADERS  adh1  {"idEvenement":"d80b0685-737b-497f-a279-45722420ae16","idAdherent":"adh1","montant":12.50,"emisLe":"2026-11-16T09:53:53.093623100Z"}
+  Partition:2  Offset:2  NO_HEADERS  adh2  {"idEvenement":"d4f358df-7ea7-4754-9de0-0b16d50cc4ae","idAdherent":"adh2","montant":30.00,"emisLe":"2026-11-16T09:53:53.170048600Z"}
+  Partition:1  Offset:0  NO_HEADERS  adh5  {"idEvenement":"d2e9b94e-67ee-48db-b0dd-3d5af2b0412b","idAdherent":"adh5","montant":75.50,"emisLe":"2026-11-16T09:53:53.369725700Z"}
+  Partition:0  Offset:0  NO_HEADERS  adh3  {"idEvenement":"3436ab0f-18bb-4ddf-927a-eeab73530e5c","idAdherent":"adh3","montant":45.00,"emisLe":"2026-11-16T09:53:53.230116700Z"}
+  Partition:0  Offset:1  NO_HEADERS  adh4  {"idEvenement":"14b09bb2-a33c-47b5-8135-c025de282fa8","idAdherent":"adh4","montant":20.00,"emisLe":"2026-11-16T09:53:53.307807300Z"}
+  Partition:0  Offset:2  NO_HEADERS  adh6  {"idEvenement":"f1ce3fd9-181e-4557-bcac-945218b73547","idAdherent":"adh6","montant":60.00,"emisLe":"2026-11-16T09:53:53.441586600Z"}
+  Processed a total of 7 messages
+  ```
+  - **Aucun en-tête** (`NO_HEADERS`), donc pas de `__TypeId__`.
+  - `montant` est un nombre JSON avec son échelle (`50.00`, `12.50`, `75.50`).
+  - **L'instant garde sa précision d'origine** : `emisLe` a jusqu'à 9 chiffres de fraction (`2026-11-16T09:53:40.211861200Z`), alors que le test de la section 3 utilisait une date sans fraction. Un consommateur doit lire de l'ISO-8601 avec une fraction variable. C'est la même valeur que `emiseLe` dans la réponse REST du cas nominal : l'instant est créé une fois par l'horloge du cas d'usage.
+  - Les 7 `idEvenement` sont tous différents.
+  - Le message `ERROR ... TimeoutException` à la fin du consommateur est la **sortie normale de `--timeout-ms 10000`** (10 s sans nouveau message), comme en phase 0. La sortie indique `Processed a total of 7 messages`.
+- **Constaté, routage** : identique à la phase 0 et à la section 3.
+
+  | Clé | Partition | Offsets |
+  |---|---|---|
+  | `adh1` (2 messages), `adh2` | 2 | 0, 1, 2 |
+  | `adh3`, `adh4`, `adh6` | 0 | 0, 1, 2 |
+  | `adh5` | 1 | 0 |
+
+  Cela correspond à la répartition de Kafka UI (partition 0 : 3, partition 1 : 1, partition 2 : 3).
+- **Constaté, ordre** :
+  - Dans chaque partition, l'ordre d'écriture est celui des instants `emisLe` (partition 2 : 09:53:40, 09:53:53.093, 09:53:53.170 ; partition 0 : …53.230, …53.307, …53.441).
+  - Entre partitions, il n'y a **pas d'ordre global** : la sortie du consommateur n'est pas dans l'ordre d'envoi (`adh5`, envoyé à …53.369, est affiché avant `adh3`, envoyé à …53.230).
+- **Compatibilité du client 4.2.2 avec le broker 4.4.0, pour les API utilisées seulement** :
+  - **Établi** : le client 4.2.2 (log `Kafka version: 4.2.2`) a travaillé avec le broker 4.4.0 : le topic existe avec 3 partitions, 7 messages envoyés par l'application y sont stockés, lus par les outils CLI et par Kafka UI.
+  - **Déduit, non tracé** : les API utilisées sont les appels de version, de métadonnées, de création de topic (`KafkaAdmin`), d'initialisation du producteur et d'envoi (l'idempotence est activée par défaut, d'après la documentation Kafka 4.2 lue à la section 2). Les requêtes réellement échangées n'ont pas été relevées.
+  - **Non établi** : la lecture de messages par un client 4.2.2 (le consommateur est l'outil CLI du broker), les groupes de consommateurs, les transactions, et le reste du protocole.
+- **Écart de nommage** : le champ de la réponse REST s'appelle `emiseLe` (`CotisationReponse`, objet du domaine) et celui du message Kafka `emisLe` (`CotisationEmise`, contrat partagé). Les deux contrats sont indépendants, mais un client qui lit les deux doit connaître l'écart. À trancher : l'aligner, ou le laisser tel quel.
+- **Non constaté** : le scénario 503 réel (pas encore joué), le comportement sous charge, le lag.
