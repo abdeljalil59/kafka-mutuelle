@@ -1,0 +1,26 @@
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      properties:
+        spring.json.add.type.headers: false
+        # Les délais du producteur restent sous le délai applicatif de 10 s
+        # (mutuelle.cotisation.kafka.delai-publication-ms), pour que Kafka
+        # renonce avant nous : l'échec vient alors du producteur, pas de notre
+        # timeout, et aucun envoi ne continue en arrière-plan.
+        # - delivery.timeout.ms (9 s) borne le temps après le retour de send() ;
+        #   il doit être >= request.timeout.ms + linger.ms (5000 + 5).
+        # - request.timeout.ms (5 s) borne l'attente de la réponse du broker.
+        # - max.block.ms (5 s) borne le blocage dans send() (métadonnées, buffer),
+        #   avant que le future existe.
+        request.timeout.ms: 5000
+        delivery.timeout.ms: 9000
+        max.block.ms: 5000
+
+mutuelle:
+  cotisation:
+    kafka:
+      topic: cotisations.emises
+      delai-publication-ms: 10000
