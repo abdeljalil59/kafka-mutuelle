@@ -94,12 +94,18 @@ class PublicationCotisationKafkaTest {
 
     @Test
     void enveloppe_une_exception_levee_de_facon_synchrone_par_send() {
-        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class)))
-                .thenThrow(new KafkaException("métadonnées indisponibles"));
+        // Exception constatée par le test sans broker (étape 3c) : KafkaException de Spring
+        // dont la cause est le TimeoutException de Kafka.
+        org.springframework.kafka.KafkaException exceptionDeSpring = new org.springframework.kafka.KafkaException(
+                "Send failed",
+                new org.apache.kafka.common.errors.TimeoutException("métadonnées indisponibles"));
+        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class))).thenThrow(exceptionDeSpring);
 
         assertThatExceptionOfType(PublicationImpossibleException.class)
                 .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION))
                 .withMessageContaining("adh1")
-                .withCauseInstanceOf(KafkaException.class);
+                .withCause(exceptionDeSpring)
+                .havingRootCause()
+                .isInstanceOf(org.apache.kafka.common.errors.TimeoutException.class);
     }
 }
