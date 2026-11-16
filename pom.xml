@@ -24,5 +24,6 @@
 
     <modules>
         <module>events-contract</module>
+        <module>cotisation-service</module>
     </modules>
 </project>
