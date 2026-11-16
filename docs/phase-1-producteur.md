@@ -49,6 +49,8 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
 - **Déduit** : le `TimeoutException` de `get(10, SECONDS)` est celui de `java.util.concurrent` : il veut dire « nous avons cessé d'attendre », pas « le message n'est pas écrit ». Avec les défauts de Kafka (120 s), le producteur aurait pu écrire le message après notre abandon. Avec les valeurs choisies ci-dessus, cet écart est fermé côté producteur, mais un retry applicatif reste risqué sans déduplication côté consommateur (phase 3).
 
 ## 3. Test d'intégration de l'adaptateur avec `@EmbeddedKafka` (étape 3b)
+
+> **Note du 16/11** : au moment de ces constats, le champ du message Kafka s'appelait `emisLe` ; il a été renommé `emiseLe` (commit `06ae463`). Les extraits de sortie réelle sont conservés tels quels.
 - **Environnement** : broker embarqué du jar `spring-kafka-test` 4.1.2 (jars Kafka en 4.2.2), client `kafka-clients` 4.2.2. Test : `PublicationCotisationKafkaIntegrationTest` (3 tests), `mvn -B verify` du 16/11/2026 : `BUILD SUCCESS`.
 - **Constaté, démarrage et câblage** : le contexte Spring démarre ; `KafkaTemplate<String, CotisationEmise>` est injecté ; `application.yml` est lu. Le log du broker embarqué contient `CreateTopics ... CreatableTopic(name='cotisations.emises', numPartitions=3, replicationFactor=1 ...): SUCCESS`. Le topic est créé par `KafkaAdmin` à partir du bean `NewTopic` : `@EmbeddedKafka` n'en déclare aucun.
 - **Constaté, JSON brut** :
@@ -102,6 +104,8 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
 - **Non vérifié** : la valeur par défaut du port (8080) n'a été lue qu'en résumé de page ; le port 8081 est fixé dans `application.yml` (constaté à l'étape 4b : `Tomcat started on port 8081`). Le comportement de bout en bout sur le broker du compose et la compatibilité du client 4.2.2 avec le broker 4.4.0 sont traités à la section 6.
 
 ## 6. Démarrage de bout en bout contre le broker du compose (étape 4b)
+
+> **Note du 16/11** : au moment de ces constats, le champ du message Kafka s'appelait `emisLe` ; il a été renommé `emiseLe` (commit `06ae463`). Les extraits de sortie réelle sont conservés tels quels.
 - **Environnement** (16/11/2026) : jar exécutable `cotisation-service-0.1.0-SNAPSHOT.jar` (construit par `mvn -B -pl cotisation-service -am package -DskipTests`), lancé par `java -jar` sur JDK 22, port 8081. Broker `apache/kafka:4.4.0` du compose (`kafka`, `kafka-ui`, volume `kafka-mutuelle-data`). Versions résolues : voir [versions.md](versions.md).
 - **Constaté, démarrage de l'application** :
   ```
@@ -169,9 +173,10 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
 - **Compatibilité du client 4.2.2 avec le broker 4.4.0, pour les API utilisées seulement** :
   - **Établi** : le client 4.2.2 (log `Kafka version: 4.2.2`) a travaillé avec le broker 4.4.0 : le topic existe avec 3 partitions, 7 messages envoyés par l'application y sont stockés, lus par les outils CLI et par Kafka UI.
   - **Constaté dans le log du producteur** (10:53:40) : `enable.idempotence = true`, `acks = -1`, `Instantiated an idempotent producer`, `ProducerId set to 1000 with epoch 0` (l'initialisation du producteur idempotent a abouti contre le broker 4.4.0), et `Cluster ID: 4L6g3nShT-eMCtK--X86sw` (celui du compose).
-  - **Déduit, non tracé** : la création du topic par `KafkaAdmin`. Les requêtes réellement échangées n'ont pas été relevées.
+  - **Déduit, non tracé** : la création du topic par `KafkaAdmin`. Preuve de la section 8 : après suppression, le topic a reparu avec 3 partitions après le redémarrage de l'application (effet constaté ; la création elle-même n'est pas dans les logs). Les requêtes réellement échangées n'ont pas été relevées.
   - **Non établi** : la lecture de messages par un client 4.2.2 (le consommateur est l'outil CLI du broker), les groupes de consommateurs, les transactions, et le reste du protocole.
 - **Écart de nommage** : le champ de la réponse REST s'appelle `emiseLe` (`CotisationReponse`, objet du domaine) et celui du message Kafka `emisLe` (`CotisationEmise`, contrat partagé). Les deux contrats sont indépendants, mais un client qui lit les deux doit connaître l'écart. À trancher : l'aligner, ou le laisser tel quel.
+  - **Résolu le 16/11** : champ renommé `emiseLe` dans le contrat Kafka (commit `06ae463`), preuve sur le fil à la section 8.
 - **Non constaté** : le comportement sous charge, le lag. Le scénario 503 réel est consigné à la section 7.
 
 ## 7. Scénario 503 réel : broker arrêté, producteur déjà chaud (étape 4b)
@@ -222,3 +227,49 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
   - Le cas « délai dépassé après envoi » (`TimeoutException` de `get(...)`), seul cas où le message peut avoir été publié malgré le 503.
   - Le chemin du futur en échec, donc la déduction « Kafka renonce avant nous » (option B des délais, section 2).
   - Le démarrage à froid avec broker arrêté (chemin B).
+
+## 8. Renommage `emisLe` en `emiseLe` et preuve sur le fil (étape 4b, suite)
+- **Contexte** (16/11/2026, heure locale +01:00) : « cotisation » est féminin, et le domaine et le REST disaient déjà `emiseLe` ; le contrat Kafka disait `emisLe` (écart de la section 6). Le champ du contrat `CotisationEmise` est renommé `emiseLe` (commit `06ae463`) : le nom du champ JSON du message Kafka change.
+- **Pourquoi supprimer le topic** : `cotisations.emises` contenait 7 messages au format `emisLe` (section 6). Aucun consommateur n'existe encore dans le dépôt. **Constaté dans le code** : le constructeur compact de `CotisationEmise` lève une `NullPointerException` si `emiseLe` est `null` ; `JacksonJsonDeserializer` utilise `JacksonMapperUtils.enhancedJsonMapper()`, qui désactive `FAIL_ON_UNKNOWN_PROPERTIES` (bytecode du jar spring-kafka 4.1.2). **Déduit, non exercé** : un consommateur lisant depuis le début aurait ignoré `emisLe`, trouvé `emiseLe` absent, et échoué dans le constructeur, au risque de rester bloqué sur le premier ancien message. Le topic de démonstration a donc été supprimé (option A) plutôt que de garder deux formats. Le volume Docker n'a pas été touché et `docker compose down -v` n'a pas été utilisé.
+- **Constaté, construction** : après l'arrêt de l'application (qui verrouillait le jar : `Unable to rename ... .jar to ... .jar.original`), `mvn -B verify` s'est terminé en `BUILD SUCCESS`. Le décompte des tests de ce `verify` n'a pas été relevé ; les 11 tests de `events-contract` et 26 de `cotisation-service` viennent d'un `mvn -B test` précédent.
+- **À noter, log de test** : la sortie Maven contient une pile `PublicationImpossibleException ... Caused by: RuntimeException: cause` pour `CotisationControllerTest`. C'est le log `ERROR` de `GestionErreursRest` dans le test `repond_503_quand_la_publication_est_impossible` (la cause est créée par le test), pas une erreur ; la classe indique `Tests run: 4, Failures: 0, Errors: 0`.
+- **Constaté, suppression puis liste** :
+  ```
+  PS> docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --delete --topic cotisations.emises
+  (aucune sortie)
+  PS> docker exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+  __consumer_offsets
+  test.persistance
+  ```
+  Le caractère asynchrone de la suppression n'a pas été constaté (une seule liste relevée).
+- **Constaté, topic recréé** (après relance de l'application) :
+  ```
+  Topic: cotisations.emises  TopicId: MHgBgt8ISFuLaM9qL5d20Q  PartitionCount: 3  ReplicationFactor: 1  Configs: min.insync.replicas=1
+  Partition: 0 Leader: 1 Replicas: 1 Isr: 1 / Partition: 1 Leader: 1 Replicas: 1 Isr: 1 / Partition: 2 Leader: 1 Replicas: 1 Isr: 1
+  ```
+  Le `TopicId` est nouveau (l'ancien, section 6, était `wz5mT0nSR6S63tNfj_nO7g`) : le topic est bien neuf.
+- **Origine des 3 partitions** : le compose ne définit ni `KAFKA_NUM_PARTITIONS` ni `KAFKA_AUTO_CREATE_TOPICS_ENABLE`.
+  - **Constaté** : le topic est absent après la suppression et présent avec 3 partitions après la relance de l'application.
+  - **Déduit** : il a été créé par notre bean `NewTopic` via `KafkaAdmin` (c'est le seul code qui demande 3 partitions ; la valeur par défaut de `num.partitions` du broker n'a pas été relue). L'ordre entre le `describe` et le premier `POST` n'est pas établi.
+  - La création n'est pas tracée dans les logs.
+- **Constaté, `POST`** :
+  ```
+  HTTP/1.1 201
+  Content-Type: application/json
+  Content-Length: 77
+  Date: Mon, 16 Nov 2026 10:48:21 GMT
+  {"idAdherent":"adh1","montant":50.00,"emiseLe":"2026-11-16T10:48:21.724712Z"}
+  ```
+- **Constaté, relecture au broker 4.4.0** (`console-consumer --from-beginning --timeout-ms 10000`, avec `print.headers`) :
+  ```
+  Partition:2  Offset:0  NO_HEADERS  adh1  {"idEvenement":"d1c2d30a-fc4b-43c5-bf04-5a630fcb6f97","idAdherent":"adh1","montant":50.00,"emiseLe":"2026-11-16T10:48:01.506356100Z"}
+  Partition:2  Offset:1  NO_HEADERS  adh1  {"idEvenement":"20e78821-f1c4-473e-b1aa-36d13f8ef394","idAdherent":"adh1","montant":50.00,"emiseLe":"2026-11-16T10:48:21.724712Z"}
+  Processed a total of 2 messages
+  ```
+  - Le champ du message Kafka s'appelle `emiseLe` ; aucun message ne contient `emisLe`. Pas d'en-tête.
+  - Les deux messages sont en partition 2 pour la clé `adh1`, comme dans les observations précédentes (même clé, même partitionneur).
+  - Fractions de l'instant : 9 chiffres (`…506356100Z`) et 6 chiffres (`…724712Z`), cohérent avec la section 3 (jusqu'à 9 chiffres). **Déduit** : la longueur varie avec la valeur de l'instant à la sortie de `Instant.toString`.
+  - Le message `ERROR ... TimeoutException` de fin est la sortie normale de `--timeout-ms` (comme aux sections 6 et 7).
+  - Le message à l'offset 0 (`emiseLe` à 10:48:01) ne correspond à aucun `curl` reproduit ici : « premier envoi, non reproduit ». **Déduit** : probablement un doublon de manipulation de l'utilisateur (une ligne de commentaire du plan collée par erreur dans PowerShell, sans effet, et un `POST` lancé en double) ; non vérifiable.
+- **À noter pour la phase 2** : l'outil CLI affiche « The consumer rebalance protocol (KIP-848) is production-ready! Set group.protocol=consumer to try it out ».
+- **Non vérifié** : la création du topic par `KafkaAdmin` n'est pas tracée dans les logs ; la valeur par défaut de `num.partitions` du broker n'a pas été lue ; l'ordre entre le `describe` et le premier `POST` ; le comportement réel d'un consommateur face à un ancien message (jamais exercé, il n'y a pas de consommateur).
