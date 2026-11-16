@@ -89,3 +89,14 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
   - Si « Send failed » est créé par le producteur ou par `KafkaTemplate`.
   - Le comportement avec un broker joignable mais sans le topic.
   - La durée avec la configuration réelle (`max.block.ms` 5000) : environ 5 s, calcul non mesuré.
+
+## 5. Endpoint REST `POST /cotisations` (étape 4a)
+- **Test** : `CotisationControllerTest` (4 tests, `@WebMvcTest` + `MockMvcTester`, `EmettreCotisation` simulé par `@MockitoBean`, sans Kafka). `mvn -B verify` du 16/11/2026 : `BUILD SUCCESS`.
+- **Contrat** : corps `{"idAdherent","montant"}` (DTO `EmettreCotisationRequete`, séparé du domaine) ; réponse 201 avec `{"idAdherent","montant","emiseLe"}` (DTO `CotisationReponse`).
+- **Erreurs** (`ProblemDetail`) : `CotisationInvalideException` donne 400 ; `PublicationImpossibleException` donne 503 ; un JSON mal formé donne 400 (constaté, le cas d'usage n'est pas appelé).
+- **Constaté** : la réponse 201 conserve l'échelle du montant (`"montant":50.00`, lu sur le texte brut), avec le mapper de Spring MVC. Ce n'est pas le mapper du sérialiseur Kafka (section 3) : aucun lien n'est démontré entre les deux.
+- **Le 503 peut cacher un message déjà publié** : il couvre deux situations qu'un client ne peut pas distinguer.
+  - Échec constaté : future en échec, ou exception synchrone de `send()` quand les métadonnées sont indisponibles (section 4). Le message n'est alors pas écrit (déduit).
+  - Délai de publication dépassé (`TimeoutException` de `get(...)`) : le producteur a pu écrire le message après l'abandon. Un client qui rejoue sa requête risque un doublon. Le texte du 503 le dit (« la cotisation a peut-être été publiée »). La protection (déduplication côté consommateur) viendra en phase 3.
+- **L'appel REST est bloquant** : la requête HTTP occupe un fil Tomcat jusqu'à la fin de la publication. Durée maximale : environ 14 s (`max.block.ms` 5 s + `delivery.timeout.ms` 9 s), cohérent avec la section 2 ; **déduit, non mesuré**. Si les métadonnées arrivent après 4 s, `send()` réussit et l'attente du future peut encore durer jusqu'à `delivery.timeout.ms` (9 s). Le délai applicatif de 10 s ne borne rien tant que `delivery.timeout.ms` (9 s) est plus court. Beaucoup de requêtes simultanées avec un Kafka lent peuvent épuiser les fils de Tomcat.
+- **Non vérifié** : le comportement de bout en bout sur le broker du compose (étape 4b), y compris la compatibilité du client 4.2.2 avec le broker 4.4.0. La valeur par défaut du port (8080) n'a été lue qu'en résumé de page ; le port 8081 est fixé dans `application.yml`.
