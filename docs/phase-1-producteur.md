@@ -132,6 +132,7 @@ Pour chaque point : ce qui est **vérifié** (source citée) et ce qui est **dé
 
     Soit **19 à 40 ms**. **Déduit** : comme l'adaptateur attend l'acquittement de Kafka avant de répondre, ces durées incluent l'aller-retour vers le broker.
   - La première requête (cas nominal) n'a pas été chronométrée, mais ses logs la bornent : `emiseLe` à 10:53:40.211 et `ProducerId set to 1000 with epoch 0` à 10:53:40.574, donc **au moins environ 0,36 s** (contre 19 à 40 ms ensuite). **Déduit** : l'envoi attend l'identifiant du producteur idempotent.
+    - **Constaté sur une autre exécution** (démonstration du consommateur, [phase-1-consommateur.md](phase-1-consommateur.md), section 5) : la première requête après le démarrage de `cotisation-service` a pris 0,407736 s, contre 0,025054 s pour la suivante. Le « au moins 0,36 s » déduit était cohérent.
 - **Constaté, requêtes invalides** (aucun message produit : le topic contient exactement 7 messages, le cas nominal plus les six adhérents) :
 
   | Cas | Statut | Format | Corps |
