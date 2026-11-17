@@ -17,6 +17,7 @@ cotisation-service ──► cotisations.emises ──► prelevement-service �
 | `cotisations.emises` | `idAdherent` | 3 |
 | `prelevements.resultats` (champ `type` : ACCEPTE / REJETE) | `idAdherent` | 3 |
 | `impayes.relances` | `idAdherent` | 3 |
+| `cotisations.emises-dlt` (messages de `cotisations.emises` rejetés à la désérialisation) | `idAdherent` (clé d'origine conservée) | 3 |
 
 ## Prérequis
 
@@ -31,10 +32,10 @@ cotisation-service ──► cotisations.emises ──► prelevement-service �
 | 0 | Kafka en CLI (Docker) + Kafka UI | Terminée |
 | 1 | Producer et consumer Spring, tests unitaires | En cours |
 | 2 | Clés, rebalancing, plusieurs instances | En cours |
-| 3 | Idempotence, retries, DLT | À faire |
+| 3 | Idempotence, retries, DLT | En cours |
 | 4 | Prometheus puis Grafana | À faire |
 | 5 | Dashboard live `kafka-lab` + scénarios | À faire |
 | 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | À faire |
 | 7 | Tests d'intégration complets, éventuellement ELK | À faire |
 
-Journal d'apprentissage : [`docs/`](docs/) : [phase 0, Kafka en CLI](docs/phase-0-cli.md), [phase 1, producteur](docs/phase-1-producteur.md), [phase 1, consommateur](docs/phase-1-consommateur.md), [phase 2, rebalancing](docs/phase-2-rebalancing.md). Versions retenues : [`docs/versions.md`](docs/versions.md).
+Journal d'apprentissage : [`docs/`](docs/) : [phase 0, Kafka en CLI](docs/phase-0-cli.md), [phase 1, producteur](docs/phase-1-producteur.md), [phase 1, consommateur](docs/phase-1-consommateur.md), [phase 2, rebalancing](docs/phase-2-rebalancing.md), [phase 3, message invalide](docs/phase-3-message-invalide.md). Versions retenues : [`docs/versions.md`](docs/versions.md).

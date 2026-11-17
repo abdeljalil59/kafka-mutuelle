@@ -119,7 +119,7 @@ Pour chaque point : ce qui est **constaté** (sortie réelle ou source citée), 
 - **Compatibilité client 4.2.2 et broker 4.4.0** : établie pour la production (section 6 de `phase-1-producteur.md`) et maintenant pour la consommation en groupe (rejoindre un groupe, lire, commiter, reprendre).
 
 ## 6. Non traité et non vérifié
-- **Non traité (phase 3)** : les erreurs de désérialisation (message illisible) ; le comportement du conteneur n'est pas affirmé, il sera constaté en phase 3.
+- **Message illisible (erreur de désérialisation)** : non traité à cette étape ; constaté depuis : voir [phase-3-message-invalide.md](phase-3-message-invalide.md).
 - **Non exercé** : les exceptions dans le listener (le `DefaultErrorHandler` par défaut est documenté mais jamais déclenché), le rebalancing à plusieurs membres (à deux membres : constaté, voir [phase-2-rebalancing.md](phase-2-rebalancing.md) ; au-delà : non exercé), `group.protocol=consumer` (KIP-848), les transactions, l'arrêt brutal (constaté depuis : voir [phase-2-rebalancing.md](phase-2-rebalancing.md), scénario E).
 - **Non vérifié** :
   - Le mécanisme qui garde le processus vivant sans serveur web.
