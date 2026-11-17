@@ -34,7 +34,8 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`. E
 ## Compatibilité client 4.2.2 et broker 4.4.0
 - **Constatée pour les seules API utilisées** (étape 4b, voir [phase-1-producteur.md](phase-1-producteur.md), section 6) : le client 4.2.2 a initialisé un producteur idempotent (ProducerId attribué), créé ou utilisé le topic et envoyé 7 messages stockés par le broker 4.4.0, lus par les outils CLI et par Kafka UI. Aucune page de documentation lue ne la confirme.
 - **Constatée aussi pour la consommation en groupe** (étape 5 de [phase-1-consommateur.md](phase-1-consommateur.md), section 5) : un client 4.2.2 a rejoint un groupe (protocole `classic`, stratégie `range`), lu, commité des offsets, repris à l'offset commité et quitté le groupe proprement contre le broker 4.4.0.
-- **Non prouvé** : le reste du protocole, dont les transactions, `group.protocol=consumer` (KIP-848), le rebalancing à plusieurs membres et l'arrêt brutal d'un membre.
+- **Constatée aussi pour le rebalancing à deux membres et l'arrêt brutal** ([phase-2-rebalancing.md](phase-2-rebalancing.md)) : deux clients 4.2.2 du même groupe (protocole `classic`, assignor `range`) contre le broker 4.4.0 : répartition des partitions, reprise aux offsets commités, départ propre (`LeaveGroup`) et arrêt brutal d'un processus (détection par le broker après environ 34 à 41 s).
+- **Non prouvé** : le reste du protocole, dont les transactions, `group.protocol=consumer` (KIP-848), `CooperativeStickyAssignor` (présent dans la liste mais non choisi) et plus de deux membres dans un groupe.
 
 ## Non vérifié
 - **Broker embarqué** : `@EmbeddedKafka` démarre un broker 4.2.2, pas 4.4.0.

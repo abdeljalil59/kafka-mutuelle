@@ -115,12 +115,12 @@ Pour chaque point : ce qui est **constaté** (sortie réelle ou source citée), 
   - Un groupe sans membre conserve ses offsets, et chaque démarrage obtient un nouveau `CONSUMER-ID`.
   - Les partitions 0 et 1, jamais traitées, n'ont pas d'offset commité (`-` au `describe`, « Found no committed offset » à chaque démarrage, remise à 0 par `earliest`).
   - Le processus reste vivant sans serveur web : l'effet est constaté, le mécanisme (threads non-daemon du conteneur) n'a pas été lu.
-- **Déduit** : avec un arrêt brutal (sans `LeaveGroup`), le broker n'identifierait le départ qu'après `session.timeout.ms` (45000 ms). Non exercé.
+- **Déduit** : avec un arrêt brutal (sans `LeaveGroup`), le broker n'identifierait le départ qu'après `session.timeout.ms` (45000 ms). Non exercé à cette étape ; constaté depuis : voir [phase-2-rebalancing.md](phase-2-rebalancing.md), scénario E.
 - **Compatibilité client 4.2.2 et broker 4.4.0** : établie pour la production (section 6 de `phase-1-producteur.md`) et maintenant pour la consommation en groupe (rejoindre un groupe, lire, commiter, reprendre).
 
 ## 6. Non traité et non vérifié
 - **Non traité (phase 3)** : les erreurs de désérialisation (message illisible) ; le comportement du conteneur n'est pas affirmé, il sera constaté en phase 3.
-- **Non exercé** : les exceptions dans le listener (le `DefaultErrorHandler` par défaut est documenté mais jamais déclenché), le rebalancing à plusieurs membres, `group.protocol=consumer` (KIP-848), les transactions, l'arrêt brutal.
+- **Non exercé** : les exceptions dans le listener (le `DefaultErrorHandler` par défaut est documenté mais jamais déclenché), le rebalancing à plusieurs membres (à deux membres : constaté, voir [phase-2-rebalancing.md](phase-2-rebalancing.md) ; au-delà : non exercé), `group.protocol=consumer` (KIP-848), les transactions, l'arrêt brutal (constaté depuis : voir [phase-2-rebalancing.md](phase-2-rebalancing.md), scénario E).
 - **Non vérifié** :
   - Le mécanisme qui garde le processus vivant sans serveur web.
   - La création du topic par `KafkaAdmin` (non tracée).
