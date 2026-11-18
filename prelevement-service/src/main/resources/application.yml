@@ -17,3 +17,7 @@ prelevement:
   plafond: 100.00
   kafka:
     topic: cotisations.emises
+    retry-demo:
+      actif: false          # true : démarre le listener de démonstration @RetryableTopic
+      topic: cotisations.retry-demo
+      group-id: retry-demo-group
