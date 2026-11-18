@@ -6,12 +6,15 @@ import io.github.abdeljalil59.mutuelle.prelevement.domain.Decision;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.DemandePrelevement;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.PlafondPrelevement;
 import java.math.BigDecimal;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
 class TraiterDemandePrelevementTest {
 
+    private static final UUID ID_EVENEMENT = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000001");
+
     private static DemandePrelevement demande(String montant) {
-        return new DemandePrelevement("adh1", new BigDecimal(montant));
+        return new DemandePrelevement(ID_EVENEMENT, "adh1", new BigDecimal(montant));
     }
 
     private static TraiterDemandePrelevement avecPlafond(String plafond) {

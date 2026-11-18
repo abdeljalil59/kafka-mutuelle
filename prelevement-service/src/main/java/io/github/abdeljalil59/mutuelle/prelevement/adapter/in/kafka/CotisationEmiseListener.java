@@ -24,7 +24,7 @@ public class CotisationEmiseListener {
     @KafkaListener(topics = "${prelevement.kafka.topic}")
     public void ecouter(ConsumerRecord<String, CotisationEmise> message) {
         CotisationEmise evenement = message.value();
-        DemandePrelevement demande = new DemandePrelevement(evenement.idAdherent(), evenement.montant());
+        DemandePrelevement demande = new DemandePrelevement(evenement.idEvenement(), evenement.idAdherent(), evenement.montant());
         Decision decision = traiterDemandePrelevement.traiter(demande);
         LOGGER.info("partition={} offset={} cle={} idEvenement={} montant={} decision={}",
                 message.partition(), message.offset(), message.key(),

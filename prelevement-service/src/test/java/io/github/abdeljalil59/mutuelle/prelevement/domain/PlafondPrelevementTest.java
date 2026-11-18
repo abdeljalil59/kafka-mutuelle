@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -11,9 +12,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 class PlafondPrelevementTest {
 
     private static final PlafondPrelevement PLAFOND = new PlafondPrelevement(new BigDecimal("100.00"));
+    private static final UUID ID_EVENEMENT = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000001");
 
     private static DemandePrelevement demande(String montant) {
-        return new DemandePrelevement("adh1", new BigDecimal(montant));
+        return new DemandePrelevement(ID_EVENEMENT, "adh1", new BigDecimal(montant));
     }
 
     @Test

@@ -1,10 +1,12 @@
 package io.github.abdeljalil59.mutuelle.prelevement.domain;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
-public record DemandePrelevement(String idAdherent, BigDecimal montant) {
+public record DemandePrelevement(UUID idEvenement, String idAdherent, BigDecimal montant) {
 
     public DemandePrelevement {
+        exigerNonNull(idEvenement, "idEvenement");
         exigerNonNull(idAdherent, "idAdherent");
         exigerNonNull(montant, "montant");
         if (idAdherent.isBlank()) {
