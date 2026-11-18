@@ -5,7 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
-import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.PublicationCotisation;
+import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.Outbox;
 import io.github.abdeljalil59.mutuelle.cotisation.domain.Cotisation;
 import io.github.abdeljalil59.mutuelle.cotisation.domain.CotisationInvalideException;
 import java.math.BigDecimal;
@@ -26,30 +26,30 @@ class EmettreCotisationTest {
     private static final UUID ID_EVENEMENT = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000001");
 
     @Mock
-    private PublicationCotisation publication;
+    private Outbox outbox;
 
     private EmettreCotisation emettreCotisation;
 
     @BeforeEach
     void initialise() {
         emettreCotisation = new EmettreCotisation(
-                publication, Clock.fixed(MAINTENANT, ZoneOffset.UTC), () -> ID_EVENEMENT);
+                outbox, Clock.fixed(MAINTENANT, ZoneOffset.UTC), () -> ID_EVENEMENT);
     }
 
     @Test
-    void publie_la_cotisation_creee_et_la_retourne() {
+    void enregistre_la_cotisation_creee_dans_l_outbox_et_la_retourne() {
         Cotisation resultat = emettreCotisation.emettre("adh1", new BigDecimal("50.00"));
 
         Cotisation attendue = new Cotisation("adh1", new BigDecimal("50.00"), MAINTENANT);
         assertThat(resultat).isEqualTo(attendue);
-        verify(publication).publier(attendue, ID_EVENEMENT);
+        verify(outbox).enregistrer(attendue, ID_EVENEMENT);
     }
 
     @Test
-    void ne_publie_rien_si_la_cotisation_est_invalide() {
+    void n_enregistre_rien_si_la_cotisation_est_invalide() {
         assertThatExceptionOfType(CotisationInvalideException.class)
                 .isThrownBy(() -> emettreCotisation.emettre("adh1", BigDecimal.ZERO));
 
-        verifyNoInteractions(publication);
+        verifyNoInteractions(outbox);
     }
 }

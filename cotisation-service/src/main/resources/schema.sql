@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS outbox (
+    id_evenement VARCHAR(36) PRIMARY KEY,
+    topic VARCHAR(100) NOT NULL,
+    cle VARCHAR(100) NOT NULL,
+    payload CLOB NOT NULL,
+    cree_le TIMESTAMP WITH TIME ZONE NOT NULL,
+    envoye_le TIMESTAMP WITH TIME ZONE
+);

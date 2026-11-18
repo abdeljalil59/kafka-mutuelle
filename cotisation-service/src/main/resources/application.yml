@@ -3,9 +3,9 @@ spring:
     bootstrap-servers: localhost:9092
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      # Le payload est déjà du JSON : il est sérialisé par l'outbox (OutboxJdbc), pas par Kafka.
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
       properties:
-        spring.json.add.type.headers: false
         # Les délais du producteur restent sous le délai applicatif de 10 s
         # (mutuelle.cotisation.kafka.delai-publication-ms), pour que Kafka
         # renonce avant nous : l'échec vient alors du producteur, pas de notre
@@ -24,6 +24,12 @@ mutuelle:
     kafka:
       topic: cotisations.emises
       delai-publication-ms: 10000
+    outbox:
+      relais-actif: true      # false : le relais ne démarre pas (démonstrations, tests)
+      # Pause entre deux passages du relais (fixedDelay). Limite connue : un événement enregistré
+      # n'est publié qu'au passage suivant, soit jusqu'à ce délai plus le temps de publier le lot.
+      delai-relais-ms: 10000
+      taille-lot: 50
 
 server:
   port: 8081  # 8080 est occupé par Kafka UI (compose)

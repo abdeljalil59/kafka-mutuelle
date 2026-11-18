@@ -8,18 +8,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.PublicationImpossibleException;
-import io.github.abdeljalil59.mutuelle.cotisation.domain.Cotisation;
-import io.github.abdeljalil59.mutuelle.events.CotisationEmise;
-import java.math.BigDecimal;
 import java.time.Duration;
-import java.time.Instant;
-import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeoutException;
 import org.apache.kafka.common.KafkaException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -29,62 +23,59 @@ import org.springframework.kafka.support.SendResult;
 class PublicationCotisationKafkaTest {
 
     private static final String TOPIC = "cotisations.emises";
-    private static final UUID ID_EVENEMENT = UUID.fromString("33333333-3333-3333-3333-333333333333");
-    private static final Instant EMISE_LE = Instant.parse("2026-11-16T10:00:00Z");
-    private static final Cotisation COTISATION = new Cotisation("adh1", new BigDecimal("50.00"), EMISE_LE);
+    private static final String PAYLOAD =
+            "{\"idEvenement\":\"33333333-3333-3333-3333-333333333333\",\"idAdherent\":\"adh1\","
+                    + "\"montant\":50.00,\"emiseLe\":\"2026-11-16T10:00:00Z\"}";
 
     @Mock
-    private KafkaTemplate<String, CotisationEmise> kafkaTemplate;
+    private KafkaTemplate<String, String> kafkaTemplate;
 
     private PublicationCotisationKafka adaptateur(Duration delai) {
-        return new PublicationCotisationKafka(kafkaTemplate, TOPIC, delai);
+        return new PublicationCotisationKafka(kafkaTemplate, delai);
     }
 
     @Test
-    void envoie_l_evenement_sur_le_topic_avec_idAdherent_comme_cle() {
-        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class)))
-                .thenReturn(CompletableFuture.<SendResult<String, CotisationEmise>>completedFuture(null));
+    void envoie_le_payload_tel_quel_sur_le_topic_avec_la_cle() {
+        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(String.class)))
+                .thenReturn(CompletableFuture.<SendResult<String, String>>completedFuture(null));
 
-        adaptateur(Duration.ofSeconds(1)).publier(COTISATION, ID_EVENEMENT);
+        adaptateur(Duration.ofSeconds(1)).publier(TOPIC, "adh1", PAYLOAD);
 
-        ArgumentCaptor<CotisationEmise> evenement = ArgumentCaptor.forClass(CotisationEmise.class);
-        verify(kafkaTemplate).send(eq(TOPIC), eq("adh1"), evenement.capture());
-        assertThat(evenement.getValue()).isEqualTo(
-                new CotisationEmise(ID_EVENEMENT, "adh1", new BigDecimal("50.00"), EMISE_LE));
+        verify(kafkaTemplate).send(TOPIC, "adh1", PAYLOAD);
     }
 
     @Test
     void enveloppe_l_echec_de_l_envoi_dans_une_PublicationImpossibleException() {
-        CompletableFuture<SendResult<String, CotisationEmise>> echec = new CompletableFuture<>();
+        CompletableFuture<SendResult<String, String>> echec = new CompletableFuture<>();
         echec.completeExceptionally(new KafkaException("broker indisponible"));
-        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class))).thenReturn(echec);
+        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(String.class))).thenReturn(echec);
 
         assertThatExceptionOfType(PublicationImpossibleException.class)
-                .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION, ID_EVENEMENT))
+                .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(TOPIC, "adh1", PAYLOAD))
                 .withMessageContaining("adh1")
                 .withCauseInstanceOf(KafkaException.class);
     }
 
     @Test
     void signale_un_delai_depasse_quand_l_envoi_n_est_jamais_confirme() {
-        CompletableFuture<SendResult<String, CotisationEmise>> jamaisComplete = new CompletableFuture<>();
-        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class))).thenReturn(jamaisComplete);
+        CompletableFuture<SendResult<String, String>> jamaisComplete = new CompletableFuture<>();
+        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(String.class))).thenReturn(jamaisComplete);
 
         assertThatExceptionOfType(PublicationImpossibleException.class)
-                .isThrownBy(() -> adaptateur(Duration.ofMillis(50)).publier(COTISATION, ID_EVENEMENT))
+                .isThrownBy(() -> adaptateur(Duration.ofMillis(50)).publier(TOPIC, "adh1", PAYLOAD))
                 .withMessageContaining("50 ms")
                 .withCauseInstanceOf(TimeoutException.class);
     }
 
     @Test
     void conserve_le_statut_d_interruption_du_thread() {
-        CompletableFuture<SendResult<String, CotisationEmise>> jamaisComplete = new CompletableFuture<>();
-        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class))).thenReturn(jamaisComplete);
+        CompletableFuture<SendResult<String, String>> jamaisComplete = new CompletableFuture<>();
+        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(String.class))).thenReturn(jamaisComplete);
 
         Thread.currentThread().interrupt();
         try {
             assertThatExceptionOfType(PublicationImpossibleException.class)
-                    .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION, ID_EVENEMENT))
+                    .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(TOPIC, "adh1", PAYLOAD))
                     .withCauseInstanceOf(InterruptedException.class);
             assertThat(Thread.currentThread().isInterrupted()).isTrue();
         } finally {
@@ -99,10 +90,10 @@ class PublicationCotisationKafkaTest {
         org.springframework.kafka.KafkaException exceptionDeSpring = new org.springframework.kafka.KafkaException(
                 "Send failed",
                 new org.apache.kafka.common.errors.TimeoutException("métadonnées indisponibles"));
-        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class))).thenThrow(exceptionDeSpring);
+        when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(String.class))).thenThrow(exceptionDeSpring);
 
         assertThatExceptionOfType(PublicationImpossibleException.class)
-                .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION, ID_EVENEMENT))
+                .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(TOPIC, "adh1", PAYLOAD))
                 .withMessageContaining("adh1")
                 .withCause(exceptionDeSpring)
                 .havingRootCause()
