@@ -10,7 +10,9 @@ import io.github.abdeljalil59.mutuelle.events.CotisationEmise;
 import io.github.abdeljalil59.mutuelle.prelevement.application.TraiterDemandePrelevement;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.PlafondPrelevement;
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.UUID;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.AfterEach;
@@ -25,8 +27,12 @@ class CotisationEmiseListenerTest {
 
     private final Logger logger = (Logger) LoggerFactory.getLogger(CotisationEmiseListener.class);
     private final ListAppender<ILoggingEvent> journal = new ListAppender<>();
+    // Journal sans effet : ce test ne vérifie que le journal applicatif du listener.
     private final CotisationEmiseListener listener = new CotisationEmiseListener(
-            new TraiterDemandePrelevement(new PlafondPrelevement(new BigDecimal("100.00"))));
+            new TraiterDemandePrelevement(
+                    new PlafondPrelevement(new BigDecimal("100.00")),
+                    decision -> { },
+                    Clock.fixed(Instant.parse("2026-11-18T09:00:00Z"), ZoneOffset.UTC)));
 
     @BeforeEach
     void branche_le_journal() {

@@ -1,11 +1,15 @@
 package io.github.abdeljalil59.mutuelle.prelevement.config;
 
+import io.github.abdeljalil59.mutuelle.prelevement.adapter.out.jdbc.JournalDecisionsJdbc;
 import io.github.abdeljalil59.mutuelle.prelevement.application.TraiterDemandePrelevement;
+import io.github.abdeljalil59.mutuelle.prelevement.application.port.out.JournalDecisions;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.PlafondPrelevement;
 import java.math.BigDecimal;
+import java.time.Clock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.jdbc.core.simple.JdbcClient;
 
 @Configuration
 public class PrelevementConfig {
@@ -17,7 +21,18 @@ public class PrelevementConfig {
     }
 
     @Bean
-    TraiterDemandePrelevement traiterDemandePrelevement(PlafondPrelevement plafond) {
-        return new TraiterDemandePrelevement(plafond);
+    Clock clock() {
+        return Clock.systemUTC();
+    }
+
+    @Bean
+    JournalDecisions journalDecisions(JdbcClient jdbcClient) {
+        return new JournalDecisionsJdbc(jdbcClient);
+    }
+
+    @Bean
+    TraiterDemandePrelevement traiterDemandePrelevement(
+            PlafondPrelevement plafond, JournalDecisions journalDecisions, Clock clock) {
+        return new TraiterDemandePrelevement(plafond, journalDecisions, clock);
     }
 }
