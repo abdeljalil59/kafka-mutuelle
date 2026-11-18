@@ -17,6 +17,9 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`. E
 | Sérialiseur JSON `JacksonJsonSerializer` (`spring-kafka` 4.1.2) | Jackson 3 (`tools.jackson`) | Constaté sur le jar avec `javap` : constructeurs en `tools.jackson.databind.json.JsonMapper`. `JsonSerializer`, lui, utilise Jackson 2 (`com.fasterxml`) et porte une annotation `@Deprecated` dans son fichier de classe (portée non précisée). Non utilisé. |
 | `spring-boot-maven-plugin` | 4.1.2 | Version gérée par `spring-boot-starter-parent`, constatée au build (`repackage` exécuté). |
 | Spring Framework | 7.0.10 | Résolu. |
+| `spring-boot-starter-jdbc` | 4.1.2 | Géré par le BOM de Boot (présent dans `spring-boot-dependencies-4.1.2.pom`). Constaté : `spring-boot-starter-jdbc-4.1.2.jar`, `spring-boot-jdbc-4.1.2.jar` et `HikariCP-7.0.2.jar` sur le classpath des tests de `prelevement-service` (rapport Surefire, 18/11). |
+| H2 (`com.h2database:h2`, scope runtime) | 2.4.240 | `h2.version` du BOM `spring-boot-dependencies` 4.1.2 ; constaté : `h2-2.4.240.jar` sur le classpath des tests. |
+| `JdbcClient` (`spring-jdbc`) | 7.0.10 | Classe `org.springframework.jdbc.core.simple.JdbcClient` dans `spring-jdbc-7.0.10.jar`, version de Spring Framework résolue (même rapport Surefire). |
 | JUnit Jupiter | 6.0.3 | Résolu, scope test. |
 | Mockito | 5.23.0 | Résolu, scope test. |
 | AssertJ | 3.27.7 | Résolu, scope test. |
