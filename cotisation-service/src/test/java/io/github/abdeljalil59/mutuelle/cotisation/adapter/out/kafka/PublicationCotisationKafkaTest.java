@@ -37,7 +37,7 @@ class PublicationCotisationKafkaTest {
     private KafkaTemplate<String, CotisationEmise> kafkaTemplate;
 
     private PublicationCotisationKafka adaptateur(Duration delai) {
-        return new PublicationCotisationKafka(kafkaTemplate, TOPIC, delai, () -> ID_EVENEMENT);
+        return new PublicationCotisationKafka(kafkaTemplate, TOPIC, delai);
     }
 
     @Test
@@ -45,7 +45,7 @@ class PublicationCotisationKafkaTest {
         when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class)))
                 .thenReturn(CompletableFuture.<SendResult<String, CotisationEmise>>completedFuture(null));
 
-        adaptateur(Duration.ofSeconds(1)).publier(COTISATION);
+        adaptateur(Duration.ofSeconds(1)).publier(COTISATION, ID_EVENEMENT);
 
         ArgumentCaptor<CotisationEmise> evenement = ArgumentCaptor.forClass(CotisationEmise.class);
         verify(kafkaTemplate).send(eq(TOPIC), eq("adh1"), evenement.capture());
@@ -60,7 +60,7 @@ class PublicationCotisationKafkaTest {
         when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class))).thenReturn(echec);
 
         assertThatExceptionOfType(PublicationImpossibleException.class)
-                .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION))
+                .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION, ID_EVENEMENT))
                 .withMessageContaining("adh1")
                 .withCauseInstanceOf(KafkaException.class);
     }
@@ -71,7 +71,7 @@ class PublicationCotisationKafkaTest {
         when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class))).thenReturn(jamaisComplete);
 
         assertThatExceptionOfType(PublicationImpossibleException.class)
-                .isThrownBy(() -> adaptateur(Duration.ofMillis(50)).publier(COTISATION))
+                .isThrownBy(() -> adaptateur(Duration.ofMillis(50)).publier(COTISATION, ID_EVENEMENT))
                 .withMessageContaining("50 ms")
                 .withCauseInstanceOf(TimeoutException.class);
     }
@@ -84,7 +84,7 @@ class PublicationCotisationKafkaTest {
         Thread.currentThread().interrupt();
         try {
             assertThatExceptionOfType(PublicationImpossibleException.class)
-                    .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION))
+                    .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION, ID_EVENEMENT))
                     .withCauseInstanceOf(InterruptedException.class);
             assertThat(Thread.currentThread().isInterrupted()).isTrue();
         } finally {
@@ -102,7 +102,7 @@ class PublicationCotisationKafkaTest {
         when(kafkaTemplate.send(eq(TOPIC), eq("adh1"), any(CotisationEmise.class))).thenThrow(exceptionDeSpring);
 
         assertThatExceptionOfType(PublicationImpossibleException.class)
-                .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION))
+                .isThrownBy(() -> adaptateur(Duration.ofSeconds(1)).publier(COTISATION, ID_EVENEMENT))
                 .withMessageContaining("adh1")
                 .withCause(exceptionDeSpring)
                 .havingRootCause()

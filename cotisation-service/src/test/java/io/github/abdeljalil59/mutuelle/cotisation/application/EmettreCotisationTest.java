@@ -12,6 +12,7 @@ import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -22,6 +23,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 class EmettreCotisationTest {
 
     private static final Instant MAINTENANT = Instant.parse("2026-11-16T10:00:00Z");
+    private static final UUID ID_EVENEMENT = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000001");
 
     @Mock
     private PublicationCotisation publication;
@@ -30,7 +32,8 @@ class EmettreCotisationTest {
 
     @BeforeEach
     void initialise() {
-        emettreCotisation = new EmettreCotisation(publication, Clock.fixed(MAINTENANT, ZoneOffset.UTC));
+        emettreCotisation = new EmettreCotisation(
+                publication, Clock.fixed(MAINTENANT, ZoneOffset.UTC), () -> ID_EVENEMENT);
     }
 
     @Test
@@ -39,7 +42,7 @@ class EmettreCotisationTest {
 
         Cotisation attendue = new Cotisation("adh1", new BigDecimal("50.00"), MAINTENANT);
         assertThat(resultat).isEqualTo(attendue);
-        verify(publication).publier(attendue);
+        verify(publication).publier(attendue, ID_EVENEMENT);
     }
 
     @Test

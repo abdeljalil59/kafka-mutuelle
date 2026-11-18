@@ -32,12 +32,11 @@ public class CotisationConfig {
             KafkaTemplate<String, CotisationEmise> kafkaTemplate,
             @Value("${mutuelle.cotisation.kafka.topic}") String topic,
             @Value("${mutuelle.cotisation.kafka.delai-publication-ms}") long delaiPublicationMs) {
-        return new PublicationCotisationKafka(
-                kafkaTemplate, topic, Duration.ofMillis(delaiPublicationMs), UUID::randomUUID);
+        return new PublicationCotisationKafka(kafkaTemplate, topic, Duration.ofMillis(delaiPublicationMs));
     }
 
     @Bean
     EmettreCotisation emettreCotisation(PublicationCotisation publication, Clock clock) {
-        return new EmettreCotisation(publication, clock);
+        return new EmettreCotisation(publication, clock, UUID::randomUUID);
     }
 }

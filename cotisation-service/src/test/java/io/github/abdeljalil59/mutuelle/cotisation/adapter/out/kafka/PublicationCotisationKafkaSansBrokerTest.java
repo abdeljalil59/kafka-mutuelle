@@ -81,11 +81,11 @@ class PublicationCotisationKafkaSansBrokerTest {
     @Test
     void l_adaptateur_enveloppe_le_TimeoutException_de_kafka_dans_une_PublicationImpossibleException() {
         PublicationCotisationKafka adaptateur =
-                new PublicationCotisationKafka(template, TOPIC, Duration.ofSeconds(5), UUID::randomUUID);
+                new PublicationCotisationKafka(template, TOPIC, Duration.ofSeconds(5));
         Cotisation cotisation = new Cotisation("adh1", new BigDecimal("50.00"), EMISE_LE);
 
         long debut = System.nanoTime();
-        Throwable erreur = catchThrowable(() -> adaptateur.publier(cotisation));
+        Throwable erreur = catchThrowable(() -> adaptateur.publier(cotisation, UUID.randomUUID()));
         long dureeMs = ecouleMs(debut);
 
         LOGGER.info("CONSTAT adaptateur : exception après {} ms : {}", dureeMs, decrire(erreur));

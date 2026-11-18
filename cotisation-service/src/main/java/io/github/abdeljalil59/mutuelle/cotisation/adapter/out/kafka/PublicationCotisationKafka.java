@@ -9,7 +9,6 @@ import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
-import java.util.function.Supplier;
 import org.springframework.kafka.core.KafkaTemplate;
 
 public class PublicationCotisationKafka implements PublicationCotisation {
@@ -17,21 +16,18 @@ public class PublicationCotisationKafka implements PublicationCotisation {
     private final KafkaTemplate<String, CotisationEmise> kafkaTemplate;
     private final String topic;
     private final Duration delaiMaximal;
-    private final Supplier<UUID> generateurIdEvenement;
 
     public PublicationCotisationKafka(KafkaTemplate<String, CotisationEmise> kafkaTemplate,
                                       String topic,
-                                      Duration delaiMaximal,
-                                      Supplier<UUID> generateurIdEvenement) {
+                                      Duration delaiMaximal) {
         this.kafkaTemplate = kafkaTemplate;
         this.topic = topic;
         this.delaiMaximal = delaiMaximal;
-        this.generateurIdEvenement = generateurIdEvenement;
     }
 
     @Override
-    public void publier(Cotisation cotisation) {
-        CotisationEmise evenement = versEvenement(cotisation);
+    public void publier(Cotisation cotisation, UUID idEvenement) {
+        CotisationEmise evenement = versEvenement(cotisation, idEvenement);
         try {
             kafkaTemplate.send(topic, evenement.idAdherent(), evenement)
                     .get(delaiMaximal.toMillis(), TimeUnit.MILLISECONDS);
@@ -54,9 +50,9 @@ public class PublicationCotisationKafka implements PublicationCotisation {
         }
     }
 
-    private CotisationEmise versEvenement(Cotisation cotisation) {
+    private CotisationEmise versEvenement(Cotisation cotisation, UUID idEvenement) {
         return new CotisationEmise(
-                generateurIdEvenement.get(),
+                idEvenement,
                 cotisation.idAdherent(),
                 cotisation.montant(),
                 cotisation.emiseLe());

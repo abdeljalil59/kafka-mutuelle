@@ -47,6 +47,7 @@ class PublicationCotisationKafkaIntegrationTest {
             LoggerFactory.getLogger(PublicationCotisationKafkaIntegrationTest.class);
     private static final String TOPIC = "cotisations.emises";
     private static final Instant EMISE_LE = Instant.parse("2026-11-16T10:00:00Z");
+    private static final UUID ID_EVENEMENT = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000001");
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     @Autowired
@@ -69,7 +70,7 @@ class PublicationCotisationKafkaIntegrationTest {
     @Test
     void publie_un_json_sans_entete_de_type() {
         try (Consumer<String, String> consumer = consommateurEnFinDeLog()) {
-            publication.publier(new Cotisation("adh1", new BigDecimal("50.00"), EMISE_LE));
+            publication.publier(new Cotisation("adh1", new BigDecimal("50.00"), EMISE_LE), ID_EVENEMENT);
 
             ConsumerRecord<String, String> message = lire(consumer, 1).get(0);
             List<String> entetes = StreamSupport.stream(message.headers().spliterator(), false)
@@ -84,7 +85,7 @@ class PublicationCotisationKafkaIntegrationTest {
             JsonNode json = JSON.readTree(message.value());
             assertThat(json.propertyNames())
                     .containsExactlyInAnyOrder("idEvenement", "idAdherent", "montant", "emiseLe");
-            assertThat(UUID.fromString(json.get("idEvenement").asString())).isNotNull();
+            assertThat(UUID.fromString(json.get("idEvenement").asString())).isEqualTo(ID_EVENEMENT);
             assertThat(json.get("idAdherent").asString()).isEqualTo("adh1");
             // Format constaté puis figé : montant en nombre JSON avec son échelle,
             // emiseLe en chaîne ISO-8601 (et non en nombre epoch).
@@ -101,7 +102,8 @@ class PublicationCotisationKafkaIntegrationTest {
         List<String> cles = List.of("adh1", "adh2", "adh3", "adh4", "adh5", "adh6", "adh1", "adh2");
 
         try (Consumer<String, String> consumer = consommateurEnFinDeLog()) {
-            cles.forEach(cle -> publication.publier(new Cotisation(cle, BigDecimal.TEN, EMISE_LE)));
+            cles.forEach(cle -> publication.publier(
+                    new Cotisation(cle, BigDecimal.TEN, EMISE_LE), UUID.randomUUID()));
 
             List<ConsumerRecord<String, String>> messages = lire(consumer, cles.size());
             messages.forEach(message -> LOGGER.info("PREUVE routage : cle={} partition={} offset={}",
