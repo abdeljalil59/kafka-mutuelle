@@ -48,6 +48,8 @@ class MessageInvalideIntegrationTest {
 
     private static final String TOPIC = "cotisations.emises";
     private static final String TOPIC_REJETS = "cotisations.emises-dlt";
+    // Délai des appels à l'Admin Kafka : 5 s ne suffisent pas quand la machine est chargée (TimeoutException constatée).
+    private static final Duration TIMEOUT_ADMIN = Duration.ofSeconds(30);
     // Messages envoyés par toute la classe : référence du test de commit, quel que soit l'ordre des tests.
     private static final AtomicInteger MESSAGES_ENVOYES = new AtomicInteger();
 
@@ -192,7 +194,7 @@ class MessageInvalideIntegrationTest {
         try (Admin admin = Admin.create(Map.<String, Object>of(
                 AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, embeddedKafka.getBrokersAsString()))) {
             Map<TopicPartition, OffsetAndMetadata> offsets = admin.listConsumerGroupOffsets(groupId)
-                    .partitionsToOffsetAndMetadata().get(5, TimeUnit.SECONDS);
+                    .partitionsToOffsetAndMetadata().get(TIMEOUT_ADMIN.toSeconds(), TimeUnit.SECONDS);
             return offsets.entrySet().stream()
                     .filter(entree -> entree.getKey().topic().equals(TOPIC))
                     .mapToLong(entree -> entree.getValue().offset())

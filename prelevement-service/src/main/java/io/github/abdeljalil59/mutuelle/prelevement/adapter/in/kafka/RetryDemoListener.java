@@ -25,10 +25,13 @@ public class RetryDemoListener {
         this.jsonMapper = jsonMapper;
     }
 
-    // 3 tentatives : la première sur le topic principal, puis deux réessais non bloquants (5 s, puis 10 s)
-    // sur des topics dédiés. La fabrique dédiée lit les octets bruts, y compris pour les topics de retry et le DLT
+    // 3 tentatives : la première sur le topic principal, puis deux réessais non bloquants sur des topics dédiés
+    // (5 s, puis 10 s par défaut). Les délais se règlent par propriété (backoff-delay en ms, backoff-multiplier) :
+    // les tests les réduisent. La fabrique dédiée lit les octets bruts, y compris pour les topics de retry et le DLT
     // (les endpoints de retry n'héritent pas des "properties" du @KafkaListener, constaté dans le bytecode).
-    @RetryableTopic(attempts = "3", backOff = @BackOff(delay = 5000, multiplier = 2),
+    @RetryableTopic(attempts = "3",
+            backOff = @BackOff(delayString = "${prelevement.kafka.retry-demo.backoff-delay:5000}",
+                    multiplierString = "${prelevement.kafka.retry-demo.backoff-multiplier:2}"),
             autoCreateTopics = "true", numPartitions = "3",
             kafkaTemplate = "kafkaTemplate", listenerContainerFactory = "retryDemoContainerFactory")
     @KafkaListener(topics = "${prelevement.kafka.retry-demo.topic}",
