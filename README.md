@@ -12,7 +12,7 @@ cotisation-service ──► cotisations.emises ──► prelevement-service �
                                                                                         └──► kafka-lab (dashboard live)
 ```
 
-Réalisé : `cotisation-service` ──► `cotisations.emises` ──► `prelevement-service` (décision enregistrée dans Oracle).
+Réalisé : `cotisation-service` ──► `cotisations.emises` ──► `prelevement-service` (décisions enregistrées dans Oracle, de façon idempotente et par lot).
 Pas encore réalisé : `prelevements.resultats`, `impaye-service`, `kafka-lab`.
 
 | Topic | Clé | Partitions | Valeur |
@@ -42,6 +42,15 @@ Pas encore réalisé : `prelevements.resultats`, `impaye-service`, `kafka-lab`.
 
 Démarrer l'infrastructure : `docker compose -f infra/docker-compose.yml up -d`. Ne jamais utiliser `down -v` : il supprime le volume `kafka-mutuelle-data` et toutes les données.
 
+## Consommation dans `prelevement-service`
+
+- **Consumer Kafka en mode batch** : `@KafkaListener(batch = "true")` reçoit une `List<ConsumerRecord>`, tous les messages d'un poll.
+- **Écriture idempotente par `MERGE` Oracle** (`WHEN NOT MATCHED THEN INSERT` seul) : un doublon est ignoré, sans exception ni log (plus de capture de `DuplicateKeyException`). Toutes les décisions du lot sont écrites par un seul `JdbcTemplate.batchUpdate` (`JdbcClient` n'a pas de batch dans `spring-jdbc` 7.0.10).
+- **Repli un par un sur échec du lot** : le cas d'usage rejoue les décisions une à une pour trouver la première en échec, puis le listener lève `BatchListenerFailedException(index)`. Les offsets avant l'index sont validés ; seul le message fautif est réessayé puis envoyé au DLT.
+- **Messages illisibles** (`value() == null`) détectés dans le listener, en mode batch rien ne les route automatiquement.
+
+Détails et mesures : [phase-5-etape-2-merge-batch.md](docs/phase-5-etape-2-merge-batch.md).
+
 ## Prérequis
 
 - Docker Desktop (démarré avant toute commande `docker`), y compris pour `mvn verify` : les tests de `prelevement-service` démarrent Oracle dans un conteneur (premier téléchargement : environ 1,3 Go, 5,1 Go sur disque ; démarrage de plusieurs minutes sur une machine chargée)
@@ -59,12 +68,12 @@ Démarrer l'infrastructure : `docker compose -f infra/docker-compose.yml up -d`.
 | 3 | Idempotence, retries, DLT | En cours |
 | 4 | Prometheus puis Grafana | À faire |
 | 5 | Dashboard live `kafka-lab` + scénarios | À faire |
-| 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | En cours (Avro et Schema Registry réalisés ; `prelevement-service` migré sur Oracle ; outbox vu sur H2 en phase 3, pas encore sur Oracle ; exactly-once et Kafka Streams à faire) |
+| 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | En cours (Avro et Schema Registry réalisés ; `prelevement-service` migré sur Oracle, écriture idempotente par `MERGE` et par lot ; outbox vu sur H2 en phase 3, pas encore sur Oracle ; exactly-once et Kafka Streams à faire) |
 | 7 | Tests d'intégration complets, éventuellement ELK | À faire |
 
 ## Études réalisées
 
-Cinq études, chacune avec son journal (constaté, déduit, non vérifié) et ses tests. Leur numéro de « phase » est un nom de travail : au tableau ci-dessus, les trois premières relèvent de la phase 3 (l'outbox y est vu sur H2, avant l'outbox Oracle de la phase 6) et les deux dernières de la phase 6 (la « phase 5 » de travail n'est pas la phase 5 du tableau, `kafka-lab`).
+Six études, chacune avec son journal (constaté, déduit, non vérifié) et ses tests. Leur numéro de « phase » est un nom de travail : au tableau ci-dessus, les trois premières relèvent de la phase 3 (l'outbox y est vu sur H2, avant l'outbox Oracle de la phase 6) et les trois dernières de la phase 6 (la « phase 5 » de travail n'est pas la phase 5 du tableau, `kafka-lab`).
 
 | Étude | Contenu | Journal |
 |---|---|---|
@@ -73,5 +82,6 @@ Cinq études, chacune avec son journal (constaté, déduit, non vérifié) et se
 | Retry topic | Retries non bloquants avec `@RetryableTopic`, cohabitation avec le DLT, perte de l'ordre par clé | [phase-3-retry-topic.md](docs/phase-3-retry-topic.md) |
 | Avro et Schema Registry | Schéma `CotisationEmise` enregistré dans le registre (port 8082), sérialisation Avro de bout en bout | [phase-4-avro-schema-registry.md](docs/phase-4-avro-schema-registry.md) |
 | Oracle (`prelevement-service`) | H2 remplacé par Oracle Free 23ai ; tests sur Oracle dans un conteneur (Testcontainers) ; découvertes sur `Instant` et ORA-12899 | [phase-5-etape-1-oracle.md](docs/phase-5-etape-1-oracle.md) |
+| `MERGE` et écriture par lot (`prelevement-service`) | Idempotence par `MERGE … WHEN NOT MATCHED` sans exception ; listener Kafka en mode batch, `JdbcTemplate.batchUpdate`, repli un par un et `BatchListenerFailedException(index)` | [phase-5-etape-2-merge-batch.md](docs/phase-5-etape-2-merge-batch.md) |
 
-Journal d'apprentissage : [`docs/`](docs/) : [phase 0, Kafka en CLI](docs/phase-0-cli.md), [phase 1, producteur](docs/phase-1-producteur.md), [phase 1, consommateur](docs/phase-1-consommateur.md), [phase 2, rebalancing](docs/phase-2-rebalancing.md), [phase 3, message invalide](docs/phase-3-message-invalide.md), [phase 3, idempotence](docs/phase-3-idempotence.md), [phase 3, outbox](docs/phase-3-outbox.md), [phase 3, retry topic](docs/phase-3-retry-topic.md), [phase 4, Avro et Schema Registry](docs/phase-4-avro-schema-registry.md), [phase 5 étape 1, Oracle](docs/phase-5-etape-1-oracle.md). Versions retenues : [`docs/versions.md`](docs/versions.md) (Oracle, ojdbc17 et Testcontainers relevés ; pas encore Avro 1.11.5 ni Confluent 7.9.11).
+Journal d'apprentissage : [`docs/`](docs/) : [phase 0, Kafka en CLI](docs/phase-0-cli.md), [phase 1, producteur](docs/phase-1-producteur.md), [phase 1, consommateur](docs/phase-1-consommateur.md), [phase 2, rebalancing](docs/phase-2-rebalancing.md), [phase 3, message invalide](docs/phase-3-message-invalide.md), [phase 3, idempotence](docs/phase-3-idempotence.md), [phase 3, outbox](docs/phase-3-outbox.md), [phase 3, retry topic](docs/phase-3-retry-topic.md), [phase 4, Avro et Schema Registry](docs/phase-4-avro-schema-registry.md), [phase 5 étape 1, Oracle](docs/phase-5-etape-1-oracle.md), [phase 5 étape 2, MERGE et batch](docs/phase-5-etape-2-merge-batch.md). Versions retenues : [`docs/versions.md`](docs/versions.md) (Oracle, ojdbc17 et Testcontainers relevés ; pas encore Avro 1.11.5 ni Confluent 7.9.11).
