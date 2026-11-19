@@ -7,6 +7,7 @@ import io.github.abdeljalil59.mutuelle.cotisation.application.EmettreCotisation;
 import io.github.abdeljalil59.mutuelle.cotisation.application.RelayerOutbox;
 import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.Outbox;
 import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.PublicationCotisation;
+import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.UUID;
@@ -41,12 +42,13 @@ public class CotisationConfig {
         return new OutboxJdbc(jdbcClient, jsonMapper, topic);
     }
 
-    // Le payload de l'outbox est déjà du JSON : le template envoie des chaînes (StringSerializer).
+    // Le payload de l'outbox est du JSON ; l'adaptateur le convertit en objet Avro (KafkaAvroSerializer).
     @Bean
     PublicationCotisation publicationCotisation(
-            KafkaTemplate<String, String> kafkaTemplate,
+            KafkaTemplate<String, CotisationEmise> kafkaTemplate,
+            JsonMapper jsonMapper,
             @Value("${mutuelle.cotisation.kafka.delai-publication-ms}") long delaiPublicationMs) {
-        return new PublicationCotisationKafka(kafkaTemplate, Duration.ofMillis(delaiPublicationMs));
+        return new PublicationCotisationKafka(kafkaTemplate, jsonMapper, Duration.ofMillis(delaiPublicationMs));
     }
 
     @Bean

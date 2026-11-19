@@ -3,9 +3,13 @@ package io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
+import io.github.abdeljalil59.mutuelle.prelevement.AvroTestUtil;
+import io.github.abdeljalil59.mutuelle.prelevement.domain.PrelevementInvalideException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -41,7 +45,10 @@ import org.springframework.test.annotation.DirtiesContext;
 // Seul le topic source est déclaré ici : le topic de rejets (cotisations.emises-dlt) doit être créé par le service.
 // Le test ne doit jamais atteindre le broker du compose (localhost:9092) : voir le garde-fou.
 // Aucune lecture de logs : le DLT et les offsets commités du groupe suffisent.
-@SpringBootTest(properties = "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}")
+// Les messages valides sont de l'Avro (registre factice mock://) ; les messages illisibles restent des octets bruts.
+@SpringBootTest(properties = {
+        "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+        "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE})
 @EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
 @DirtiesContext
 class MessageInvalideIntegrationTest {
@@ -55,6 +62,8 @@ class MessageInvalideIntegrationTest {
 
     private DefaultKafkaProducerFactory<String, byte[]> usine;
     private KafkaTemplate<String, byte[]> producteur;
+    private DefaultKafkaProducerFactory<String, CotisationEmise> usineAvro;
+    private KafkaTemplate<String, CotisationEmise> producteurAvro;
     private KafkaConsumer<String, byte[]> consommateurRejets;
 
     @Autowired
@@ -76,6 +85,10 @@ class MessageInvalideIntegrationTest {
                 KafkaTestUtils.producerProps(embeddedKafka), new StringSerializer(), new ByteArraySerializer());
         producteur = new KafkaTemplate<>(usine);
 
+        // Producteur d'événements valides : Avro (KafkaAvroSerializer, registre factice).
+        usineAvro = AvroTestUtil.usineAvro(embeddedKafka);
+        producteurAvro = new KafkaTemplate<>(usineAvro);
+
         // Lecteur du DLT : sans commit ; ses partitions sont assignées à la demande (voir lireLesRejetsDeLaCle).
         consommateurRejets = new KafkaConsumer<>(Map.<String, Object>of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, embeddedKafka.getBrokersAsString(),
@@ -88,6 +101,7 @@ class MessageInvalideIntegrationTest {
     void libere_le_producteur_et_le_consommateur() {
         consommateurRejets.close();
         usine.destroy();
+        usineAvro.destroy();
     }
 
     @Test
@@ -96,7 +110,7 @@ class MessageInvalideIntegrationTest {
         byte[] illisible = "ceci-n-est-pas-du-json".getBytes(StandardCharsets.UTF_8);
 
         SendResult<String, byte[]> envoiIllisible = envoyer(cle, illisible);
-        envoyer(cle, valide(cle));
+        envoyerAvro(cle, valide(cle));
 
         attendreQueLeGroupeAitToutCommite();
         List<ConsumerRecord<String, byte[]>> rejets = lireLesRejetsDeLaCle(cle);
@@ -116,24 +130,26 @@ class MessageInvalideIntegrationTest {
         assertThat(rejet.headers().lastHeader("springDeserializerExceptionValue")).isNull();
     }
 
-    // Prouve (ou infirme) que PrelevementInvalideException est inatteignable via Kafka : le contrat
-    // CotisationEmise rejette déjà un montant négatif, donc l'échec survient à la désérialisation.
+    // Avec le JSON, le constructeur du record rejetait un montant négatif à la désérialisation (DeserializationException,
+    // octets d'origine au DLT). Avec Avro, le contrat n'impose plus d'invariants : l'événement est désérialisé, puis
+    // rejeté par le domaine (PrelevementInvalideException) et republié au DLT en Avro. Il n'est pas réessayé : voir
+    // ErreursKafkaConfigTest, qui constate la classification du gestionnaire.
     @Test
-    void un_montant_negatif_est_rejete_a_la_deserialisation_et_va_au_dlt() throws Exception {
+    void un_montant_negatif_est_rejete_par_le_domaine_et_va_au_dlt_en_avro() throws Exception {
         String cle = "adh-negatif";
-        byte[] montantNegatif = json(UUID.randomUUID(), cle, "-5").getBytes(StandardCharsets.UTF_8);
+        CotisationEmise montantNegatif = AvroTestUtil.evenement(
+                UUID.randomUUID(), cle, "-5.00", Instant.parse("2026-11-17T08:00:00Z"));
 
-        envoyer(cle, montantNegatif);
-        envoyer(cle, valide(cle));
+        envoyerAvro(cle, montantNegatif);
+        envoyerAvro(cle, valide(cle));
 
         attendreQueLeGroupeAitToutCommite();
         List<ConsumerRecord<String, byte[]>> rejets = lireLesRejetsDeLaCle(cle);
 
         assertThat(rejets).hasSize(1);
         ConsumerRecord<String, byte[]> rejet = rejets.get(0);
-        assertThat(rejet.value()).isEqualTo(montantNegatif);
-        assertThat(texte(rejet, "kafka_dlt-exception-fqcn"))
-                .isEqualTo("org.springframework.kafka.support.serializer.DeserializationException");
+        assertThat(AvroTestUtil.decoder(TOPIC_REJETS, rejet.value())).isEqualTo(montantNegatif);
+        assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(PrelevementInvalideException.class.getName());
     }
 
     private SendResult<String, byte[]> envoyer(String cle, byte[] valeur) throws Exception {
@@ -142,13 +158,13 @@ class MessageInvalideIntegrationTest {
         return resultat;
     }
 
-    private static byte[] valide(String idAdherent) {
-        return json(UUID.randomUUID(), idAdherent, "50.00").getBytes(StandardCharsets.UTF_8);
+    private void envoyerAvro(String cle, CotisationEmise evenement) throws Exception {
+        producteurAvro.send(TOPIC, cle, evenement).get(10, TimeUnit.SECONDS);
+        MESSAGES_ENVOYES.incrementAndGet();
     }
 
-    private static String json(UUID idEvenement, String idAdherent, String montant) {
-        return "{\"idEvenement\":\"" + idEvenement + "\",\"idAdherent\":\"" + idAdherent
-                + "\",\"montant\":" + montant + ",\"emiseLe\":\"2026-11-17T08:00:00Z\"}";
+    private static CotisationEmise valide(String idAdherent) {
+        return AvroTestUtil.evenement(UUID.randomUUID(), idAdherent, "50.00", Instant.parse("2026-11-17T08:00:00Z"));
     }
 
     // Chaque message envoyé (traité ou rejeté) doit être dépassé par le groupe : les offsets commités

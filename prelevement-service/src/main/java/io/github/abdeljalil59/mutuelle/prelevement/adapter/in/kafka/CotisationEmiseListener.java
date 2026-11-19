@@ -1,6 +1,6 @@
 package io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka;
 
-import io.github.abdeljalil59.mutuelle.events.CotisationEmise;
+import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import io.github.abdeljalil59.mutuelle.prelevement.application.TraiterDemandePrelevement;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.Decision;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.DemandePrelevement;
@@ -24,10 +24,12 @@ public class CotisationEmiseListener {
     @KafkaListener(topics = "${prelevement.kafka.topic}")
     public void ecouter(ConsumerRecord<String, CotisationEmise> message) {
         CotisationEmise evenement = message.value();
-        DemandePrelevement demande = new DemandePrelevement(evenement.idEvenement(), evenement.idAdherent(), evenement.montant());
+        // L'Avro ne porte aucun invariant : DemandePrelevement les vérifie (PrelevementInvalideException).
+        DemandePrelevement demande = new DemandePrelevement(
+                evenement.getIdEvenement(), evenement.getIdAdherent(), evenement.getMontant());
         Decision decision = traiterDemandePrelevement.traiter(demande);
         LOGGER.info("partition={} offset={} cle={} idEvenement={} montant={} decision={}",
                 message.partition(), message.offset(), message.key(),
-                evenement.idEvenement(), evenement.montant(), decision);
+                evenement.getIdEvenement(), evenement.getMontant(), decision);
     }
 }

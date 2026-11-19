@@ -13,6 +13,7 @@ import io.github.abdeljalil59.mutuelle.cotisation.application.EmettreCotisation;
 import io.github.abdeljalil59.mutuelle.cotisation.application.RelayerOutbox;
 import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.Outbox;
 import io.github.abdeljalil59.mutuelle.cotisation.domain.Cotisation;
+import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -37,11 +38,13 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 // et peut donc stubber l'espion de l'outbox sans qu'un autre thread n'appelle l'espion en parallèle.
 @SpringBootTest(properties = {
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+        "spring.kafka.properties.schema.registry.url=" + OutboxTransactionIntegrationTest.REGISTRE,
         "mutuelle.cotisation.outbox.relais-actif=false"})
 @EmbeddedKafka
 @DirtiesContext
 class OutboxTransactionIntegrationTest {
 
+    static final String REGISTRE = "mock://cotisation-transaction";
     private static final Logger LOGGER = LoggerFactory.getLogger(OutboxTransactionIntegrationTest.class);
     private static final String TOPIC = "cotisations.emises";
     private static final UUID ID_EVENEMENT_1 = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000001");
@@ -95,7 +98,8 @@ class OutboxTransactionIntegrationTest {
         doThrow(new IllegalStateException("marquage impossible")).doCallRealMethod()
                 .when(outbox).marquerEnvoye(eq(ID_EVENEMENT_2), any());
 
-        try (Consumer<String, String> consumer = LectureTopic.consommateurEnFinDeLog(embeddedKafka, TOPIC)) {
+        try (Consumer<String, CotisationEmise> consumer =
+                     LectureTopic.consommateurEnFinDeLog(embeddedKafka, TOPIC, REGISTRE)) {
             outbox.enregistrer(new Cotisation(cle, new BigDecimal("50.00"), T1), ID_EVENEMENT_2);
 
             // Premier passage : l'événement est publié (le broker a accusé réception), puis le marquage échoue.
@@ -108,7 +112,7 @@ class OutboxTransactionIntegrationTest {
             assertThat(relayerOutbox.relayer()).isEqualTo(1);
             assertThat(estEnvoye(cle)).isTrue();
 
-            List<ConsumerRecord<String, String>> messages = LectureTopic.lireLaCle(consumer, cle, 2);
+            List<ConsumerRecord<String, CotisationEmise>> messages = LectureTopic.lireLaCle(consumer, cle, 2);
             messages.forEach(message -> LOGGER.info("PREUVE doublon : cle={} partition={} offset={} valeur={}",
                     message.key(), message.partition(), message.offset(), message.value()));
             // Même clé donc même partition ; offsets différents ; même idEvenement et même payload :
@@ -116,7 +120,7 @@ class OutboxTransactionIntegrationTest {
             assertThat(messages.get(1).partition()).isEqualTo(messages.get(0).partition());
             assertThat(messages.get(1).offset()).isGreaterThan(messages.get(0).offset());
             assertThat(messages.get(1).value()).isEqualTo(messages.get(0).value());
-            assertThat(messages.get(0).value()).contains(ID_EVENEMENT_2.toString());
+            assertThat(messages.get(0).value().getIdEvenement()).isEqualTo(ID_EVENEMENT_2);
             verify(outbox, times(2)).marquerEnvoye(eq(ID_EVENEMENT_2), any());
         }
     }

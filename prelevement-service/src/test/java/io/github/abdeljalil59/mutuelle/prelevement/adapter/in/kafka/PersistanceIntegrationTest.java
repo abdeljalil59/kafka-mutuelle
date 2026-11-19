@@ -6,9 +6,12 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
+import io.github.abdeljalil59.mutuelle.prelevement.AvroTestUtil;
 import io.github.abdeljalil59.mutuelle.prelevement.application.port.out.JournalDecisions;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -24,9 +27,7 @@ import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
-import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -38,14 +39,16 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
-import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 // Seul le topic source est déclaré ici : le topic de rejets (cotisations.emises-dlt) est créé par le service.
 // Le test ne doit jamais atteindre le broker du compose (localhost:9092) : voir le garde-fou.
 // Aucune lecture de logs : la base, le topic de rejets et les offsets commités du groupe suffisent.
-@SpringBootTest(properties = "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}")
+// Les événements sont de l'Avro (registre factice mock://), le rejet d'une exception du listener aussi.
+@SpringBootTest(properties = {
+        "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+        "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE})
 @EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
 @DirtiesContext
 class PersistanceIntegrationTest {
@@ -67,8 +70,8 @@ class PersistanceIntegrationTest {
     // Messages envoyés par toute la classe : référence de l'attente des offsets, quel que soit l'ordre des tests.
     private static final AtomicInteger MESSAGES_ENVOYES = new AtomicInteger();
 
-    private DefaultKafkaProducerFactory<String, byte[]> usine;
-    private KafkaTemplate<String, byte[]> producteur;
+    private DefaultKafkaProducerFactory<String, CotisationEmise> usine;
+    private KafkaTemplate<String, CotisationEmise> producteur;
     private KafkaConsumer<String, byte[]> consommateurRejets;
 
     @Autowired
@@ -92,9 +95,8 @@ class PersistanceIntegrationTest {
         // Garde-fou : le contexte doit pointer vers le broker embarqué, jamais vers localhost:9092.
         assertThat(bootstrapServers).isEqualTo(embeddedKafka.getBrokersAsString());
 
-        // Producteur de test : octets bruts, donc aucun en-tête de type JSON.
-        usine = new DefaultKafkaProducerFactory<>(
-                KafkaTestUtils.producerProps(embeddedKafka), new StringSerializer(), new ByteArraySerializer());
+        // Producteur de test : événements Avro (KafkaAvroSerializer, registre factice).
+        usine = AvroTestUtil.usineAvro(embeddedKafka);
         producteur = new KafkaTemplate<>(usine);
 
         // Lecteur du DLT : sans commit ; ses partitions sont assignées à la demande (voir lireLesRejetsDeLaCle).
@@ -114,7 +116,7 @@ class PersistanceIntegrationTest {
     @Test
     void doublon_meme_idEvenement_donne_une_seule_ligne() throws Exception {
         String cle = "cle-doublon";
-        byte[] message = json(ID_DOUBLON, "adh-doublon", "50.00");
+        CotisationEmise message = evenement(ID_DOUBLON, "adh-doublon", "50.00");
 
         // Le même message deux fois : même clé, donc même partition.
         envoyer(cle, message);
@@ -131,8 +133,8 @@ class PersistanceIntegrationTest {
         // Même clé pour les deux messages : même partition, le valide est derrière l'invalide.
         String cle = "cle-echec-base";
 
-        envoyer(cle, json(ID_ECHEC, ID_ADHERENT_TROP_LONG, "50.00"));
-        envoyer(cle, json(ID_VALIDE_APRES_ECHEC, "adh-valide", "50.00"));
+        envoyer(cle, evenement(ID_ECHEC, ID_ADHERENT_TROP_LONG, "50.00"));
+        envoyer(cle, evenement(ID_VALIDE_APRES_ECHEC, "adh-valide", "50.00"));
 
         attendreQueLeGroupeAitToutCommite();
         List<ConsumerRecord<String, byte[]>> rejets = lireLesRejetsDeLaCle(cle);
@@ -141,12 +143,13 @@ class PersistanceIntegrationTest {
         assertThat(nombreDeLignes(ID_VALIDE_APRES_ECHEC)).isEqualTo(1);
         assertThat(decisionEnBase(ID_VALIDE_APRES_ECHEC)).isEqualTo("ACCEPTE");
 
-        // Exactement un rejet pour cette clé : celui du message invalide, republié en JSON.
+        // Exactement un rejet pour cette clé : celui du message invalide (pas le valide, d'un autre idEvenement),
+        // republié en Avro par le KafkaAvroSerializer du DelegatingByTypeSerializer.
         assertThat(rejets).hasSize(1);
         ConsumerRecord<String, byte[]> rejet = rejets.get(0);
-        String valeur = new String(rejet.value(), StandardCharsets.UTF_8);
-        assertThat(valeur).contains(ID_ECHEC.toString()).contains(ID_ADHERENT_TROP_LONG);
-        assertThat(valeur).doesNotContain(ID_VALIDE_APRES_ECHEC.toString());
+        CotisationEmise rejete = AvroTestUtil.decoder(TOPIC_REJETS, rejet.value());
+        assertThat(rejete.getIdEvenement()).isEqualTo(ID_ECHEC);
+        assertThat(rejete.getIdAdherent()).isEqualTo(ID_ADHERENT_TROP_LONG);
         assertThat(texte(rejet, "kafka_dlt-original-topic")).isEqualTo(TOPIC);
         assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(CAUSE_ATTENDUE);
     }
@@ -155,7 +158,7 @@ class PersistanceIntegrationTest {
     void dix_livraisons_avant_dlt() throws Exception {
         String cle = "cle-dix-livraisons";
 
-        envoyer(cle, json(ID_DIX_LIVRAISONS, ID_ADHERENT_TROP_LONG, "50.00"));
+        envoyer(cle, evenement(ID_DIX_LIVRAISONS, ID_ADHERENT_TROP_LONG, "50.00"));
 
         attendreQueLeGroupeAitToutCommite();
         List<ConsumerRecord<String, byte[]>> rejets = lireLesRejetsDeLaCle(cle);
@@ -167,15 +170,13 @@ class PersistanceIntegrationTest {
                 .enregistrer(argThat(decision -> ID_DIX_LIVRAISONS.equals(decision.idEvenement())));
     }
 
-    private void envoyer(String cle, byte[] valeur) throws Exception {
-        producteur.send(TOPIC, cle, valeur).get(10, TimeUnit.SECONDS);
+    private void envoyer(String cle, CotisationEmise evenement) throws Exception {
+        producteur.send(TOPIC, cle, evenement).get(10, TimeUnit.SECONDS);
         MESSAGES_ENVOYES.incrementAndGet();
     }
 
-    private static byte[] json(UUID idEvenement, String idAdherent, String montant) {
-        return ("{\"idEvenement\":\"" + idEvenement + "\",\"idAdherent\":\"" + idAdherent
-                + "\",\"montant\":" + montant + ",\"emiseLe\":\"2026-11-18T08:00:00Z\"}")
-                .getBytes(StandardCharsets.UTF_8);
+    private static CotisationEmise evenement(UUID idEvenement, String idAdherent, String montant) {
+        return AvroTestUtil.evenement(idEvenement, idAdherent, montant, Instant.parse("2026-11-18T08:00:00Z"));
     }
 
     private int nombreDeLignes(UUID idEvenement) {

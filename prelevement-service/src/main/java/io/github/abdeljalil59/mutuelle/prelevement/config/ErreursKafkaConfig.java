@@ -1,6 +1,8 @@
 package io.github.abdeljalil59.mutuelle.prelevement.config;
 
-import io.github.abdeljalil59.mutuelle.events.CotisationEmise;
+import io.confluent.kafka.serializers.KafkaAvroSerializer;
+import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
+import io.github.abdeljalil59.mutuelle.prelevement.domain.PrelevementInvalideException;
 import java.util.Map;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.common.TopicPartition;
@@ -16,7 +18,6 @@ import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
-import org.springframework.kafka.support.serializer.JacksonJsonSerializer;
 
 @Configuration
 public class ErreursKafkaConfig {
@@ -35,8 +36,11 @@ public class ErreursKafkaConfig {
         return TopicBuilder.name(topicRejets(topicSource)).partitions(PARTITIONS_REJETS).replicas(1).build();
     }
 
-    // Les rejets contiennent soit les octets d'origine (désérialisation ratée), soit un CotisationEmise
+    // Les rejets contiennent soit les octets d'origine (désérialisation ratée), soit un CotisationEmise Avro
     // (exception dans le listener) : un seul KafkaTemplate, sérialiseur choisi par type exact.
+    // KafkaAvroSerializer lit schema.registry.url dans la configuration du producteur : la fabrique appelle configure()
+    // sur le DelegatingByTypeSerializer, qui la transmet à chacun de ses délégués. Constaté par ErreursKafkaConfigTest
+    // (propagation aux délégués) et par les tests d'intégration du DLT (la fabrique configure bien le sérialiseur).
     @Bean
     DefaultKafkaProducerFactoryCustomizer serialiseursRejets() {
         return usine -> {
@@ -44,18 +48,22 @@ public class ErreursKafkaConfig {
             DefaultKafkaProducerFactory<Object, Object> usineRejets = (DefaultKafkaProducerFactory<Object, Object>) usine;
             usineRejets.setValueSerializerSupplier(() -> new DelegatingByTypeSerializer(Map.of(
                     byte[].class, new ByteArraySerializer(),
-                    CotisationEmise.class, new JacksonJsonSerializer<CotisationEmise>())));
+                    CotisationEmise.class, new KafkaAvroSerializer())));
         };
     }
 
     // BackOff par défaut de DefaultErrorHandler (FixedBackOff(0, 9) : 10 livraisons sans pause) pour les exceptions
     // non fatales, à revoir quand le traitement écrira en base. Une DeserializationException est fatale par défaut :
     // le message part directement au topic de rejets, sans nouvelle tentative.
+    // Avec Avro, les invariants du contrat ne sont plus vérifiés à la désérialisation mais par DemandePrelevement :
+    // une PrelevementInvalideException est déterministe, la réessayer n'apporte rien (même traitement qu'avant).
     @Bean
     CommonErrorHandler gestionnaireErreursConsommation(
             KafkaTemplate<Object, Object> kafkaTemplate, @Value("${prelevement.kafka.topic}") String topicSource) {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
                 (message, exception) -> new TopicPartition(topicRejets(topicSource), message.partition()));
-        return new DefaultErrorHandler(recoverer);
+        DefaultErrorHandler gestionnaire = new DefaultErrorHandler(recoverer);
+        gestionnaire.addNotRetryableExceptions(PrelevementInvalideException.class);
+        return gestionnaire;
     }
 }

@@ -1,15 +1,20 @@
 spring:
   kafka:
     bootstrap-servers: localhost:9092
+    properties:
+      # Schema Registry du compose (port hôte 8082). Au niveau global : lu par le consommateur et par le
+      # producteur du topic de rejets (KafkaAvroSerializer dans ErreursKafkaConfig).
+      schema.registry.url: http://localhost:8082
     consumer:
       group-id: prelevement-service
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # ErrorHandlingDeserializer conservé autour du désérialiseur Avro : un message illisible part au topic
+      # de rejets au lieu de bloquer la partition.
       value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
       properties:
-        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
-        spring.json.value.default.type: io.github.abdeljalil59.mutuelle.events.CotisationEmise
-        spring.json.use.type.headers: false
+        spring.deserializer.value.delegate.class: io.confluent.kafka.serializers.KafkaAvroDeserializer
+        specific.avro.reader: true
     listener:
       concurrency: 1
 

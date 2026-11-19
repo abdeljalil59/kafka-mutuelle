@@ -1,7 +1,7 @@
 {
   "type": "record",
   "name": "CotisationEmise",
-  "namespace": "io.github.abdeljalil59.mutuelle.cotisation.avro",
+  "namespace": "io.github.abdeljalil59.mutuelle.events.avro",
   "doc": "Cotisation émise sur le topic cotisations.emises (clé Kafka : idAdherent).",
   "fields": [
     {

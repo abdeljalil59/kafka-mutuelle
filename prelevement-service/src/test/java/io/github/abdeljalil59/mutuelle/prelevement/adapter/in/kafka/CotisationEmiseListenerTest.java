@@ -1,14 +1,16 @@
 package io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
-import io.github.abdeljalil59.mutuelle.events.CotisationEmise;
+import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import io.github.abdeljalil59.mutuelle.prelevement.application.TraiterDemandePrelevement;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.PlafondPrelevement;
+import io.github.abdeljalil59.mutuelle.prelevement.domain.PrelevementInvalideException;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
@@ -48,8 +50,12 @@ class CotisationEmiseListenerTest {
     }
 
     private static ConsumerRecord<String, CotisationEmise> message(int partition, long offset, String montant) {
-        CotisationEmise evenement = new CotisationEmise(
-                ID_EVENEMENT, "adh1", new BigDecimal(montant), Instant.parse("2026-11-16T10:00:00Z"));
+        CotisationEmise evenement = CotisationEmise.newBuilder()
+                .setIdEvenement(ID_EVENEMENT)
+                .setIdAdherent("adh1")
+                .setMontant(new BigDecimal(montant))
+                .setEmiseLe(Instant.parse("2026-11-16T10:00:00Z"))
+                .build();
         return new ConsumerRecord<>(TOPIC, partition, offset, "adh1", evenement);
     }
 
@@ -77,5 +83,16 @@ class CotisationEmiseListenerTest {
 
         assertThat(journal.list).hasSize(1);
         assertThat(journal.list.get(0).getFormattedMessage()).contains("montant=50.00").endsWith("decision=ACCEPTE");
+    }
+
+    // L'Avro ne porte aucun invariant (contrairement au record, dont le constructeur refusait ces valeurs à la
+    // désérialisation) : c'est le domaine qui rejette, avant tout traitement.
+    @Test
+    void rejette_un_montant_negatif_par_le_domaine_sans_rien_journaliser() {
+        assertThatExceptionOfType(PrelevementInvalideException.class)
+                .isThrownBy(() -> listener.ecouter(message(0, 1L, "-5.00")))
+                .withMessageContaining("montant");
+
+        assertThat(journal.list).isEmpty();
     }
 }

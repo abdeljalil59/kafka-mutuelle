@@ -1,10 +1,14 @@
 spring:
   kafka:
     bootstrap-servers: localhost:9092
+    properties:
+      # Schema Registry du compose (port hôte 8082). Le schéma est enregistré à la première publication
+      # (auto.register.schemas, vrai par défaut), sujet cotisations.emises-value.
+      schema.registry.url: http://localhost:8082
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      # Le payload est déjà du JSON : il est sérialisé par l'outbox (OutboxJdbc), pas par Kafka.
-      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # L'outbox garde du JSON (OutboxJdbc) ; PublicationCotisationKafka le convertit en objet Avro avant l'envoi.
+      value-serializer: io.confluent.kafka.serializers.KafkaAvroSerializer
       properties:
         # Les délais du producteur restent sous le délai applicatif de 10 s
         # (mutuelle.cotisation.kafka.delai-publication-ms), pour que Kafka

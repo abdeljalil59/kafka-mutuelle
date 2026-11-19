@@ -58,4 +58,21 @@ class CotisationTest {
                 .isThrownBy(() -> new Cotisation("adh1", new BigDecimal(montant), EMISE_LE))
                 .withMessageContaining("montant");
     }
+
+    // La règle porte sur l'échelle, pas sur la valeur : 50.000 est refusé comme 50.001.
+    @ParameterizedTest
+    @ValueSource(strings = {"50.001", "10.123", "50.000"})
+    void refuse_un_montant_avec_plus_de_deux_decimales(String montant) {
+        assertThatExceptionOfType(CotisationInvalideException.class)
+                .isThrownBy(() -> new Cotisation("adh1", new BigDecimal(montant), EMISE_LE))
+                .withMessageContaining("2 décimales");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"50", "50.5", "50.00", "0.01", "5E+1"})
+    void accepte_un_montant_avec_au_plus_deux_decimales(String montant) {
+        Cotisation cotisation = new Cotisation("adh1", new BigDecimal(montant), EMISE_LE);
+
+        assertThat(cotisation.montant()).isEqualByComparingTo(montant);
+    }
 }
