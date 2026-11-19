@@ -12,7 +12,7 @@ cotisation-service ──► cotisations.emises ──► prelevement-service �
                                                                                         └──► kafka-lab (dashboard live)
 ```
 
-Réalisé : `cotisation-service` ──► `cotisations.emises` ──► `prelevement-service` (décision enregistrée en base).
+Réalisé : `cotisation-service` ──► `cotisations.emises` ──► `prelevement-service` (décision enregistrée dans Oracle).
 Pas encore réalisé : `prelevements.resultats`, `impaye-service`, `kafka-lab`.
 
 | Topic | Clé | Partitions | Valeur |
@@ -29,7 +29,8 @@ Pas encore réalisé : `prelevements.resultats`, `impaye-service`, `kafka-lab`.
 - Spring Boot 4.1.2, Spring for Apache Kafka 4.1.2, kafka-clients 4.2.2
 - Kafka 4.4.0 (`apache/kafka:4.4.0`, KRaft, un nœud) et Kafka UI v1.5.0, par Docker Compose (`infra/docker-compose.yml`)
 - **Avro 1.11.5 et Confluent Schema Registry 7.9.11** (`io.confluent:kafka-avro-serializer` 7.9.11) : contrat typé de `cotisations.emises`
-- H2 : table des décisions (idempotence) côté `prelevement-service`, table `outbox` côté `cotisation-service`
+- **Oracle Free 23ai** pour `prelevement-service` (table des décisions, idempotence) : H2 y est retiré ; `ojdbc17` 23.26.3.0.0 ; tests sur Oracle dans un conteneur (Testcontainers 2.0.5, image `gvenzl/oracle-free:23.26.4-slim-faststart`)
+- **H2 reste** pour `cotisation-service` (table `outbox`)
 
 | Composant | Port de l'hôte |
 |---|---|
@@ -37,14 +38,16 @@ Pas encore réalisé : `prelevements.resultats`, `impaye-service`, `kafka-lab`.
 | Kafka UI | 8080 |
 | **Schema Registry** | **8082** (8081 dans le conteneur, car 8081 est pris par `cotisation-service`) |
 | `cotisation-service` (API REST) | 8081 |
+| Oracle Free 23ai local (utilisé par `prelevement-service`) | 1522 (service `freepdb1`, utilisateur `kafka_mutuelle`) |
 
 Démarrer l'infrastructure : `docker compose -f infra/docker-compose.yml up -d`. Ne jamais utiliser `down -v` : il supprime le volume `kafka-mutuelle-data` et toutes les données.
 
 ## Prérequis
 
-- Docker Desktop (démarré avant toute commande `docker`)
+- Docker Desktop (démarré avant toute commande `docker`), y compris pour `mvn verify` : les tests de `prelevement-service` démarrent Oracle dans un conteneur (premier téléchargement : environ 1,3 Go, 5,1 Go sur disque ; démarrage de plusieurs minutes sur une machine chargée)
 - Java 17
 - Maven
+- **Oracle Free 23ai** installé en local, pour **exécuter** `prelevement-service` (par défaut `localhost:1522/freepdb1`, utilisateur `kafka_mutuelle`). URL, utilisateur et mot de passe se surchargent par les variables d'environnement `PRELEVEMENT_DB_URL`, `PRELEVEMENT_DB_USER` et `PRELEVEMENT_DB_PASSWORD`. Le service ne démarre pas sans base ; `cotisation-service`, lui, reste autonome (H2).
 
 ## Avancement
 
@@ -56,12 +59,12 @@ Démarrer l'infrastructure : `docker compose -f infra/docker-compose.yml up -d`.
 | 3 | Idempotence, retries, DLT | En cours |
 | 4 | Prometheus puis Grafana | À faire |
 | 5 | Dashboard live `kafka-lab` + scénarios | À faire |
-| 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | En cours (Avro et Schema Registry réalisés ; outbox vu sur H2 en phase 3 ; Oracle, exactly-once et Kafka Streams à faire) |
+| 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | En cours (Avro et Schema Registry réalisés ; `prelevement-service` migré sur Oracle ; outbox vu sur H2 en phase 3, pas encore sur Oracle ; exactly-once et Kafka Streams à faire) |
 | 7 | Tests d'intégration complets, éventuellement ELK | À faire |
 
 ## Études réalisées
 
-Quatre études, chacune avec son journal (constaté, déduit, non vérifié) et ses tests. Leur numéro de « phase » est un nom de travail : au tableau ci-dessus, les trois premières relèvent de la phase 3 (l'outbox y est vu sur H2, avant l'outbox Oracle de la phase 6) et la quatrième de la phase 6.
+Cinq études, chacune avec son journal (constaté, déduit, non vérifié) et ses tests. Leur numéro de « phase » est un nom de travail : au tableau ci-dessus, les trois premières relèvent de la phase 3 (l'outbox y est vu sur H2, avant l'outbox Oracle de la phase 6) et les deux dernières de la phase 6 (la « phase 5 » de travail n'est pas la phase 5 du tableau, `kafka-lab`).
 
 | Étude | Contenu | Journal |
 |---|---|---|
@@ -69,5 +72,6 @@ Quatre études, chacune avec son journal (constaté, déduit, non vérifié) et 
 | Outbox | Cotisation enregistrée en base, publiée par un relais planifié, au moins une fois | [phase-3-outbox.md](docs/phase-3-outbox.md) |
 | Retry topic | Retries non bloquants avec `@RetryableTopic`, cohabitation avec le DLT, perte de l'ordre par clé | [phase-3-retry-topic.md](docs/phase-3-retry-topic.md) |
 | Avro et Schema Registry | Schéma `CotisationEmise` enregistré dans le registre (port 8082), sérialisation Avro de bout en bout | [phase-4-avro-schema-registry.md](docs/phase-4-avro-schema-registry.md) |
+| Oracle (`prelevement-service`) | H2 remplacé par Oracle Free 23ai ; tests sur Oracle dans un conteneur (Testcontainers) ; découvertes sur `Instant` et ORA-12899 | [phase-5-etape-1-oracle.md](docs/phase-5-etape-1-oracle.md) |
 
-Journal d'apprentissage : [`docs/`](docs/) : [phase 0, Kafka en CLI](docs/phase-0-cli.md), [phase 1, producteur](docs/phase-1-producteur.md), [phase 1, consommateur](docs/phase-1-consommateur.md), [phase 2, rebalancing](docs/phase-2-rebalancing.md), [phase 3, message invalide](docs/phase-3-message-invalide.md), [phase 3, idempotence](docs/phase-3-idempotence.md), [phase 3, outbox](docs/phase-3-outbox.md), [phase 3, retry topic](docs/phase-3-retry-topic.md), [phase 4, Avro et Schema Registry](docs/phase-4-avro-schema-registry.md). Versions retenues : [`docs/versions.md`](docs/versions.md) (pas encore à jour pour Avro 1.11.5 et Confluent 7.9.11).
+Journal d'apprentissage : [`docs/`](docs/) : [phase 0, Kafka en CLI](docs/phase-0-cli.md), [phase 1, producteur](docs/phase-1-producteur.md), [phase 1, consommateur](docs/phase-1-consommateur.md), [phase 2, rebalancing](docs/phase-2-rebalancing.md), [phase 3, message invalide](docs/phase-3-message-invalide.md), [phase 3, idempotence](docs/phase-3-idempotence.md), [phase 3, outbox](docs/phase-3-outbox.md), [phase 3, retry topic](docs/phase-3-retry-topic.md), [phase 4, Avro et Schema Registry](docs/phase-4-avro-schema-registry.md), [phase 5 étape 1, Oracle](docs/phase-5-etape-1-oracle.md). Versions retenues : [`docs/versions.md`](docs/versions.md) (Oracle, ojdbc17 et Testcontainers relevés ; pas encore Avro 1.11.5 ni Confluent 7.9.11).

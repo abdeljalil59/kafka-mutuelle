@@ -1,6 +1,6 @@
 # Versions retenues
 
-Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`. Environnement : JDK 22.0.2 (compilation en `release 17`), Maven 3.8.6.
+Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`, puis le 19/11/2026 pour Oracle et Testcontainers (migration de `prelevement-service`). Avro 1.11.5 et Confluent 7.9.11 (phase 4) ne sont pas encore relevés ici : voir [phase-4-avro-schema-registry.md](phase-4-avro-schema-registry.md). Environnement : JDK 22.0.2 (compilation en `release 17`), Maven 3.8.6.
 
 ## Versions choisies et résolues
 
@@ -18,7 +18,11 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`. E
 | `spring-boot-maven-plugin` | 4.1.2 | Version gérée par `spring-boot-starter-parent`, constatée au build (`repackage` exécuté). |
 | Spring Framework | 7.0.10 | Résolu. |
 | `spring-boot-starter-jdbc` | 4.1.2 | Géré par le BOM de Boot (présent dans `spring-boot-dependencies-4.1.2.pom`). Constaté : `spring-boot-starter-jdbc-4.1.2.jar`, `spring-boot-jdbc-4.1.2.jar` et `HikariCP-7.0.2.jar` sur le classpath des tests de `prelevement-service` (rapport Surefire, 18/11). |
-| H2 (`com.h2database:h2`, scope runtime) | 2.4.240 | `h2.version` du BOM `spring-boot-dependencies` 4.1.2 ; constaté : `h2-2.4.240.jar` sur le classpath des tests. |
+| H2 (`com.h2database:h2`, scope runtime) | 2.4.240 | `h2.version` du BOM `spring-boot-dependencies` 4.1.2 ; constaté : `h2-2.4.240.jar` sur le classpath des tests. **Depuis le 19/11/2026, utilisé par `cotisation-service` seul (table `outbox`)** : retiré de `prelevement-service`, remplacé par Oracle. |
+| Oracle Database Free, tests (`gvenzl/oracle-free:23.26.4-slim-faststart`) | 23.26.4 | Tag choisi pour les tests (Testcontainers). Constaté dans les journaux du conteneur : version 23.26.4.0.0, répertoire interne `26ai`. Poids : 1,33 Go compressés d'après Docker Hub, 5,13 Go sur disque (constaté). https://github.com/gvenzl/oci-oracle-free |
+| Oracle Database Free 23ai, local | 23ai (version exacte non vérifiée) | Installation locale de l'utilisateur : `localhost:1522`, service `freepdb1`, utilisateur `kafka_mutuelle` (relevé de l'utilisateur ; je ne m'y suis pas connecté). |
+| `ojdbc17` (`com.oracle.database.jdbc`, scope runtime) | 23.26.3.0.0 | `oracle-database.version` du BOM `spring-boot-dependencies` 4.1.2 (constaté) ; jar téléchargé et build vert avec cette version. |
+| Testcontainers | 2.0.5 | `testcontainers.version` du BOM de Boot, qui importe `testcontainers-bom` (constaté). En 2.x les modules s'appellent `testcontainers-oracle-free` (utilisé, scope test) et `testcontainers-junit-jupiter` (présent dans le BOM, **non utilisé** : conteneur singleton). https://java.testcontainers.org/modules/databases/oraclefree/ |
 | `JdbcClient` (`spring-jdbc`) | 7.0.10 | Classe `org.springframework.jdbc.core.simple.JdbcClient` dans `spring-jdbc-7.0.10.jar`, version de Spring Framework résolue (même rapport Surefire). |
 | JUnit Jupiter | 6.0.3 | Résolu, scope test. |
 | Mockito | 5.23.0 | Résolu, scope test. |
@@ -45,3 +49,4 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`. E
 - **Broker embarqué** : `@EmbeddedKafka` démarre un broker 4.2.2, pas 4.4.0.
 - **Format JSON réel** : le format produit pour `Instant` et `BigDecimal` par `JacksonJsonSerializer` n'est pas encore lu sur un message (étape 3b). La documentation spring-kafka (https://docs.spring.io/spring-kafka/reference/kafka/serdes.html) cite `JacksonJsonSerializer` sans préciser la version de Jackson ; c'est le jar qui l'a établie (voir le tableau).
 - **Fin de support de Spring Boot 4.1** : dates non trouvées dans les pages lues.
+- **Oracle** : version exacte de l'Oracle local ; `CREATE TABLE IF NOT EXISTS` et démarrage de `prelevement-service` sur cet Oracle (constatés seulement sur le conteneur 23.26.4) ; durée de démarrage du conteneur sur une autre machine (3 min 53 s à 4 min 26 s ici, cause non établie). Voir [phase-5-etape-1-oracle.md](phase-5-etape-1-oracle.md).
