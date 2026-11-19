@@ -1,0 +1,15 @@
+# Fournisseur de dashboards (phase 6, étape 4) : Grafana charge les fichiers JSON de ce même dossier,
+# monté par infra/docker-compose.yml en /etc/grafana/provisioning/dashboards.
+apiVersion: 1
+
+providers:
+  - name: kafka-mutuelle
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    # Dashboard provisionné : le modifier dans l'interface ne l'enregistre pas, la source est le fichier JSON.
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/provisioning/dashboards
