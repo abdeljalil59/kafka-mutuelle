@@ -1,0 +1,18 @@
+# Configuration de Prometheus (phase 6, étape 3). Montée par infra/docker-compose.yml en
+# /etc/prometheus/prometheus.yml. Validation : promtool check config.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Les deux services tournent sur l'hôte (java -jar ou IDE), pas dans le compose. Prometheus, dans un conteneur, les
+  # joint par le nom spécial host.docker.internal (doc Docker Desktop). Une cible est « down » tant que son service
+  # est arrêté : c'est attendu.
+  - job_name: cotisation-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['host.docker.internal:8081']
+
+  - job_name: prelevement-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['host.docker.internal:8083']

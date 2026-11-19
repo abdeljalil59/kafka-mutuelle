@@ -50,6 +50,20 @@ services:
     depends_on:
       - kafka
 
+  # Scrape /actuator/prometheus des deux services, qui tournent sur l'hôte : voir prometheus/prometheus.yml.
+  # La configuration est à la racine du dépôt et le compose dans infra/ : d'où le « ../ » du montage (lecture seule).
+  # Pas de volume pour les données : l'historique des métriques est perdu si le conteneur est recréé.
+  # depends_on: kafka demandé pour démarrer après le broker ; Prometheus ne scrape pas le broker (il n'en dépend pas).
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - kafka
+
 volumes:
   kafka-data:
     name: kafka-mutuelle-data
