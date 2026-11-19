@@ -20,6 +20,10 @@
 
     <properties>
         <java.version>17</java.version>
+        <!-- Avro 1.11.5 et kafka-avro-serializer 7.9.11 : même ligne que l'image cp-schema-registry:7.9.11
+             (kafka-avro-serializer 7.9.11 s'appuie sur Avro 1.11.5, constaté dans le pom parent Confluent). -->
+        <avro.version>1.11.5</avro.version>
+        <confluent.version>7.9.11</confluent.version>
     </properties>
 
     <modules>
@@ -27,4 +31,29 @@
         <module>cotisation-service</module>
         <module>prelevement-service</module>
     </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.apache.avro</groupId>
+                <artifactId>avro</artifactId>
+                <version>${avro.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.confluent</groupId>
+                <artifactId>kafka-avro-serializer</artifactId>
+                <version>${confluent.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <!-- Les artefacts io.confluent ne sont pas sur Maven Central. -->
+    <repositories>
+        <repository>
+            <id>confluent</id>
+            <url>https://packages.confluent.io/maven/</url>
+            <releases><enabled>true</enabled></releases>
+            <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+    </repositories>
 </project>

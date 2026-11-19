@@ -1,0 +1,32 @@
+{
+  "type": "record",
+  "name": "CotisationEmise",
+  "namespace": "io.github.abdeljalil59.mutuelle.cotisation.avro",
+  "doc": "Cotisation émise sur le topic cotisations.emises (clé Kafka : idAdherent).",
+  "fields": [
+    {
+      "name": "idEvenement",
+      "type": {"type": "string", "logicalType": "uuid"},
+      "default": "00000000-0000-0000-0000-000000000000",
+      "doc": "Identifiant unique de l'événement : clé d'idempotence du consommateur."
+    },
+    {
+      "name": "idAdherent",
+      "type": "string",
+      "default": "",
+      "doc": "Identifiant de l'adhérent, non vide."
+    },
+    {
+      "name": "montant",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 19, "scale": 2},
+      "default": "\u0000",
+      "doc": "Montant de la cotisation, strictement positif, 2 décimales."
+    },
+    {
+      "name": "emiseLe",
+      "type": {"type": "long", "logicalType": "timestamp-micros"},
+      "default": 0,
+      "doc": "Instant d'émission (UTC), précision microseconde."
+    }
+  ]
+}

@@ -23,6 +23,21 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
 
+  # Les schémas sont stockés dans le topic _schemas du broker : pas de volume propre.
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.9.11
+    container_name: schema-registry
+    hostname: schema-registry
+    ports:
+      - "8082:8081"      # 8081 de l'hôte est pris par cotisation-service
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:19092
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1   # un seul broker (défaut : 3)
+    depends_on:
+      - kafka
+
   kafka-ui:
     image: ghcr.io/kafbat/kafka-ui:v1.5.0
     container_name: kafka-ui
@@ -31,6 +46,7 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
     depends_on:
       - kafka
 
