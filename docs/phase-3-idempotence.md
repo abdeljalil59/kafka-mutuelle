@@ -1,5 +1,10 @@
 # Phase 3 : écriture idempotente des décisions de prélèvement (`prelevement-service`)
 
+> **Mise à jour (19/11/2026)** : ce journal décrit l'état du 18/11/2026 et n'a pas été réécrit. Depuis :
+> - **`prelevement-service` utilise Oracle Free 23ai, plus H2** (phase 5 étape 1, [phase-5-etape-1-oracle.md](phase-5-etape-1-oracle.md)). Les passages sur H2 (environnement, §1, §2, §3, §5, §6, §7 et §8) ne valent plus que pour l'état antérieur ; H2 reste dans `cotisation-service` (outbox). Cause d'un échec de base au DLT : `UncategorizedSQLException` (ORA-12899) au lieu de `DataIntegrityViolationException`.
+> - **`cotisations.emises` et le DLT sont en Avro** (phase 4, [phase-4-avro-schema-registry.md](phase-4-avro-schema-registry.md)). Les passages sur le JSON (§6 et §7 : « JSON du `CotisationEmise` » au DLT, format JSON du DLT) sont périmés : un rejet contient un `CotisationEmise` Avro, ou les octets d'origine d'un message illisible.
+> - **L'écriture est un `MERGE … WHEN NOT MATCHED`, par lot** (phase 5 étape 2, [phase-5-etape-2-merge-batch.md](phase-5-etape-2-merge-batch.md)). §3 (« INSERT puis capture du doublon », `MERGE` écarté) est périmé ; en mode batch, `kafka_dlt-exception-cause-fqcn` vaut `BatchListenerFailedException`.
+
 Environnement (18/11/2026, heure locale +01:00) : Spring Boot 4.1.2, spring-kafka 4.1.2, kafka-clients 4.2.2, H2 2.4.240 (versions : voir [versions.md](versions.md)). Message illisible et topic de rejets : [phase-3-message-invalide.md](phase-3-message-invalide.md). Consommateur : [phase-1-consommateur.md](phase-1-consommateur.md).
 
 Pour chaque point : ce qui est **constaté** (sortie réelle ou source lue), **déduit** et **non vérifié**.

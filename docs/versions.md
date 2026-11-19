@@ -1,6 +1,6 @@
 # Versions retenues
 
-Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`, puis le 19/11/2026 pour Oracle et Testcontainers (migration de `prelevement-service`). Avro 1.11.5 et Confluent 7.9.11 (phase 4) ne sont pas encore relevés ici : voir [phase-4-avro-schema-registry.md](phase-4-avro-schema-registry.md). Environnement : JDK 22.0.2 (compilation en `release 17`), Maven 3.8.6.
+Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`, puis le 19/11/2026 pour Oracle et Testcontainers (migration de `prelevement-service`). Avro 1.11.5, Confluent 7.9.11 et le Schema Registry (phase 4) relevés le 19/11/2026 : détail dans [phase-4-avro-schema-registry.md](phase-4-avro-schema-registry.md). Environnement : JDK 22.0.2 (compilation en `release 17`), Maven 3.8.6.
 
 ## Versions choisies et résolues
 
@@ -23,6 +23,10 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`, p
 | Oracle Database Free 23ai, local | 23ai (version exacte non vérifiée) | Installation locale de l'utilisateur : `localhost:1522`, service `freepdb1`, utilisateur `kafka_mutuelle` (relevé de l'utilisateur ; je ne m'y suis pas connecté). |
 | `ojdbc17` (`com.oracle.database.jdbc`, scope runtime) | 23.26.3.0.0 | `oracle-database.version` du BOM `spring-boot-dependencies` 4.1.2 (constaté) ; jar téléchargé et build vert avec cette version. |
 | Testcontainers | 2.0.5 | `testcontainers.version` du BOM de Boot, qui importe `testcontainers-bom` (constaté). En 2.x les modules s'appellent `testcontainers-oracle-free` (utilisé, scope test) et `testcontainers-junit-jupiter` (présent dans le BOM, **non utilisé** : conteneur singleton). https://java.testcontainers.org/modules/databases/oraclefree/ |
+| Avro (`org.apache.avro:avro`) | 1.11.5 | `avro.version` du pom parent du projet. Même ligne que `kafka-avro-serializer` 7.9.11, dont le pom parent Confluent fixe Avro 1.11.5 (constaté, phase 4). Le BOM de Boot ne gère pas `avro` (constaté, phase 4). Jar `avro-1.11.5` dans `~/.m2`. |
+| `avro-maven-plugin` | 1.11.5 | Seule version présente dans `~/.m2`. Génère les décimaux en `ByteBuffer` par défaut (`enableDecimalLogicalType=false`, constaté dans son `plugin.xml`, phase 4) : option activée pour obtenir un `BigDecimal`. |
+| `io.confluent:kafka-avro-serializer` | 7.9.11 | `confluent.version` du pom parent du projet. Artefacts `io.confluent` absents de Maven Central : dépôt `https://packages.confluent.io/maven/` déclaré dans le pom parent. `kafka-schema-registry-client` 7.9.11 résolu avec lui, contre `kafka-clients` 4.2.2 (constaté, `dependency:tree`, phase 4). |
+| Schema Registry (`confluentinc/cp-schema-registry`) | 7.9.11 | `infra/docker-compose.yml`, port hôte 8082. Dernière 7.x au 10/11/2026 sur Docker Hub ; le dépôt Maven Confluent va jusqu'à 8.4.1, donc la 7.x n'est plus la plus récente (constaté, phase 4). |
 | `JdbcClient` (`spring-jdbc`) | 7.0.10 | Classe `org.springframework.jdbc.core.simple.JdbcClient` dans `spring-jdbc-7.0.10.jar`, version de Spring Framework résolue (même rapport Surefire). |
 | JUnit Jupiter | 6.0.3 | Résolu, scope test. |
 | Mockito | 5.23.0 | Résolu, scope test. |
@@ -49,4 +53,5 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`, p
 - **Broker embarqué** : `@EmbeddedKafka` démarre un broker 4.2.2, pas 4.4.0.
 - **Format JSON réel** : le format produit pour `Instant` et `BigDecimal` par `JacksonJsonSerializer` n'est pas encore lu sur un message (étape 3b). La documentation spring-kafka (https://docs.spring.io/spring-kafka/reference/kafka/serdes.html) cite `JacksonJsonSerializer` sans préciser la version de Jackson ; c'est le jar qui l'a établie (voir le tableau).
 - **Fin de support de Spring Boot 4.1** : dates non trouvées dans les pages lues.
+- **Confluent 7.9.11** : la documentation Confluent lue en phase 4 est celle de la plateforme 8.4, pas de la 7.9. Compatibilité de `kafka-schema-registry-client` 7.9.11 (compilé contre `kafka-clients` 3.9) avec `kafka-clients` 4.2.2 constatée pour les API utilisées seulement (arbre de dépendances, tests, fumée de l'utilisateur) : voir [phase-4-avro-schema-registry.md](phase-4-avro-schema-registry.md).
 - **Oracle** : version exacte de l'Oracle local ; `CREATE TABLE IF NOT EXISTS` et démarrage de `prelevement-service` sur cet Oracle (constatés seulement sur le conteneur 23.26.4) ; durée de démarrage du conteneur sur une autre machine (3 min 53 s à 4 min 26 s ici, cause non établie). Voir [phase-5-etape-1-oracle.md](phase-5-etape-1-oracle.md).
