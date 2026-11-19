@@ -37,3 +37,10 @@ mutuelle:
 
 server:
   port: 8081  # 8080 est occupé par Kafka UI (compose)
+
+# Seul health est exposé par défaut en HTTP : metrics (consultation) et prometheus (scrape) sont ajoutés.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus

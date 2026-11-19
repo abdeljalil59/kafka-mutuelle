@@ -36,6 +36,21 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-jdbc</artifactId>
         </dependency>
+        <!-- Serveur web : requis pour exposer les endpoints Actuator en HTTP (le service n'avait aucune API web). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+        <!-- Actuator + Micrometer ; le registre Prometheus est géré par le BOM de Spring Boot (micrometer-bom). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>runtime</scope>
+        </dependency>
         <!-- Driver Oracle : version gérée par le BOM de Spring Boot (oracle-database.version). -->
         <dependency>
             <groupId>com.oracle.database.jdbc</groupId>
@@ -45,6 +60,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-kafka-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- Apporte @AutoConfigureMetrics (spring-boot-micrometer-metrics-test) : exporter vers Prometheus dans un test. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator-test</artifactId>
             <scope>test</scope>
         </dependency>
         <!-- Oracle Free dans un conteneur pour les tests : version gérée par testcontainers-bom (importé par Boot). -->

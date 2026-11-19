@@ -10,14 +10,20 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import io.github.abdeljalil59.mutuelle.prelevement.AvroTestUtil;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
@@ -28,6 +34,7 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -38,9 +45,13 @@ import org.springframework.test.annotation.DirtiesContext;
 // Le service ne crée pas le topic : il est déclaré ici (3 partitions, comme en production).
 // Le test ne doit jamais atteindre le broker du compose (localhost:9092) : voir le garde-fou.
 // Registre de schémas factice (mock://) partagé entre le service et le producteur de test.
-@SpringBootTest(properties = {
+// Serveur web sur un port aléatoire et export Prometheus réel (@AutoConfigureMetrics) : sans cette annotation, un
+// @SpringBootTest n'autoconfigure aucun registre autre qu'en mémoire (doc Spring Boot, testing) et /actuator/prometheus
+// n'existe pas.
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE})
+@AutoConfigureMetrics
 @EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
 @DirtiesContext
 class CotisationEmiseListenerIntegrationTest extends OracleIntegrationTest {
@@ -63,6 +74,9 @@ class CotisationEmiseListenerIntegrationTest extends OracleIntegrationTest {
 
     @Value("${spring.kafka.consumer.group-id}")
     private String groupId;
+
+    @Value("${local.server.port}")
+    private int portWeb;
 
     @BeforeEach
     void prepare_le_journal_et_le_producteur() {
@@ -120,6 +134,41 @@ class CotisationEmiseListenerIntegrationTest extends OracleIntegrationTest {
         // Le commit (AckMode BATCH) suit le traitement : on attend qu'il soit visible côté broker.
         await().atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(200))
                 .untilAsserted(() -> assertThat(sommeDesOffsetsCommites()).isEqualTo(MESSAGES_ENVOYES.get()));
+    }
+
+    // Le scrape de Prometheus : GET /actuator/prometheus sur le vrai serveur web du contexte, après un vrai message.
+    @Test
+    void expose_les_metriques_au_format_prometheus() throws Exception {
+        envoyer("adh-metriques", evenement(UUID.randomUUID(), "adh-metriques", "50.00", "2026-11-16T10:48:01Z"));
+        attendreDecision("adh-metriques");
+
+        // Le timer du listener est enregistré juste après le retour du listener : on attend qu'il apparaisse.
+        await().atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> {
+            HttpResponse<String> reponse = lireLesMetriques();
+
+            assertThat(reponse.statusCode()).isEqualTo(200);
+            assertThat(nomsDeMetriques(reponse.body())).contains(
+                    "jvm_memory_used_bytes",
+                    "hikaricp_connections_active",
+                    "spring_kafka_listener_seconds_count",
+                    // Lag maximum du client, présent dès la création du consommateur. Le lag par partition
+                    // (records_lag) n'est lié qu'à une actualisation périodique de Micrometer : non asserté ici.
+                    "kafka_consumer_fetch_manager_records_lag_max");
+        });
+    }
+
+    private HttpResponse<String> lireLesMetriques() throws Exception {
+        HttpRequest requete = HttpRequest.newBuilder(URI.create("http://localhost:" + portWeb + "/actuator/prometheus"))
+                .GET().build();
+        return HttpClient.newHttpClient().send(requete, HttpResponse.BodyHandlers.ofString());
+    }
+
+    // Noms des séries du texte Prometheus (sans les commentaires # HELP / # TYPE, sans les étiquettes ni la valeur).
+    private static Set<String> nomsDeMetriques(String corps) {
+        return corps.lines()
+                .filter(ligne -> !ligne.isBlank() && !ligne.startsWith("#"))
+                .map(ligne -> ligne.split("[{ ]", 2)[0])
+                .collect(Collectors.toSet());
     }
 
     private void envoyer(String cle, CotisationEmise evenement) throws Exception {

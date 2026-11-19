@@ -17,13 +17,15 @@ public abstract class OracleIntegrationTest {
     private static final String DB_USER = "kafka_mutuelle";
     private static final String DB_PASSWORD = "kafka_mutuelle";
 
-    // Délai de démarrage porté à 5 minutes : le délai par défaut de 60 s a expiré (constaté) alors qu'Oracle
-    // initialisait encore sa base au premier démarrage, sur une machine chargée.
+    // Délai de démarrage porté à 10 minutes. Le délai par défaut de 60 s a expiré (constaté) pendant l'initialisation
+    // de la base au premier démarrage. Démarrages mesurés ensuite : 3 min 53 s à 4 min 26 s, puis deux fois plus de
+    // 5 minutes (dernier message « Database mounted ») sur la même machine plus chargée (19/11/2026) : 5 minutes
+    // ne suffisent plus.
     protected static final OracleContainer ORACLE =
             new OracleContainer("gvenzl/oracle-free:23.26.4-slim-faststart")
                     .withUsername(DB_USER)
                     .withPassword(DB_PASSWORD)
-                    .withStartupTimeout(Duration.ofMinutes(5));
+                    .withStartupTimeout(Duration.ofMinutes(10));
 
     static {
         ORACLE.start();

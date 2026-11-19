@@ -7,15 +7,23 @@ import io.github.abdeljalil59.mutuelle.cotisation.application.EmettreCotisation;
 import io.github.abdeljalil59.mutuelle.cotisation.domain.Cotisation;
 import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import java.math.BigDecimal;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.temporal.ChronoUnit;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.micrometer.metrics.test.autoconfigure.AutoConfigureMetrics;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
@@ -27,11 +35,15 @@ import org.springframework.test.annotation.DirtiesContext;
 // de test. Les scénarios qui stubbent l'outbox sont dans OutboxTransactionIntegrationTest (relais coupé),
 // car un stub posé pendant que le relais interroge le même espion serait une course.
 // Registre de schémas factice (mock://) partagé entre le service et le consommateur de test.
-@SpringBootTest(properties = {
+// Serveur web sur un port aléatoire et export Prometheus réel (@AutoConfigureMetrics) : sans cette annotation, un
+// @SpringBootTest n'autoconfigure aucun registre autre qu'en mémoire (doc Spring Boot, testing) et /actuator/prometheus
+// n'existe pas.
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         "spring.kafka.properties.schema.registry.url=" + OutboxIntegrationTest.REGISTRE,
         "mutuelle.cotisation.outbox.relais-actif=true",
         "mutuelle.cotisation.outbox.delai-relais-ms=200"})
+@AutoConfigureMetrics
 @EmbeddedKafka
 @DirtiesContext
 class OutboxIntegrationTest {
@@ -48,6 +60,9 @@ class OutboxIntegrationTest {
 
     @Autowired
     private EmbeddedKafkaBroker embeddedKafka;
+
+    @Value("${local.server.port}")
+    private int portWeb;
 
     @Test
     void flux_complet_de_la_cotisation_au_message_avro_sur_le_topic() {
@@ -71,6 +86,38 @@ class OutboxIntegrationTest {
             // timestamp-micros : l'instant d'émission est tronqué à la microseconde par l'encodage.
             assertThat(evenement.getEmiseLe()).isEqualTo(cotisation.emiseLe().truncatedTo(ChronoUnit.MICROS));
         }
+    }
+
+    // Le scrape de Prometheus : GET /actuator/prometheus sur le vrai serveur web du contexte, après une vraie publication.
+    @Test
+    void expose_les_metriques_au_format_prometheus() {
+        emettreCotisation.emettre("adh-metriques", new BigDecimal("50.00"));
+        await().atMost(Duration.ofSeconds(15)).until(() -> estEnvoye("adh-metriques"));
+
+        // Le timer du KafkaTemplate est enregistré à l'accusé du broker, que la ligne envoyée_le suit : on attend quand même.
+        await().atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> {
+            HttpResponse<String> reponse = lireLesMetriques();
+
+            assertThat(reponse.statusCode()).isEqualTo(200);
+            assertThat(nomsDeMetriques(reponse.body())).contains(
+                    "jvm_memory_used_bytes",
+                    "hikaricp_connections_active",
+                    "spring_kafka_template_seconds_count");
+        });
+    }
+
+    private HttpResponse<String> lireLesMetriques() throws Exception {
+        HttpRequest requete = HttpRequest.newBuilder(URI.create("http://localhost:" + portWeb + "/actuator/prometheus"))
+                .GET().build();
+        return HttpClient.newHttpClient().send(requete, HttpResponse.BodyHandlers.ofString());
+    }
+
+    // Noms des séries du texte Prometheus (sans les commentaires # HELP / # TYPE, sans les étiquettes ni la valeur).
+    private static Set<String> nomsDeMetriques(String corps) {
+        return corps.lines()
+                .filter(ligne -> !ligne.isBlank() && !ligne.startsWith("#"))
+                .map(ligne -> ligne.split("[{ ]", 2)[0])
+                .collect(Collectors.toSet());
     }
 
     private boolean estEnvoye(String cle) {
