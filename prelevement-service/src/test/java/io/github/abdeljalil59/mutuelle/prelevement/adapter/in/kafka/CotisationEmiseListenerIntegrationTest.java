@@ -154,7 +154,20 @@ class CotisationEmiseListenerIntegrationTest extends OracleIntegrationTest {
                     // Lag maximum du client, présent dès la création du consommateur. Le lag par partition
                     // (records_lag) n'est lié qu'à une actualisation périodique de Micrometer : non asserté ici.
                     "kafka_consumer_fetch_manager_records_lag_max");
+            // Compteur custom de JournalDecisionsJdbc. La série existe dès le démarrage, à 0 : sa seule présence ne
+            // prouverait rien, c'est sa valeur après le message (50.00 sous le plafond, donc ACCEPTE) qui le prouve.
+            assertThat(valeurDeLaSerie(reponse.body(), "prelevement_decisions_total{decision=\"ACCEPTE\"}"))
+                    .isGreaterThanOrEqualTo(1.0);
         });
+    }
+
+    // Valeur d'une série du texte Prometheus identifiée par son nom et ses étiquettes exacts, ou -1 si elle est absente.
+    private static double valeurDeLaSerie(String corps, String serie) {
+        return corps.lines()
+                .filter(ligne -> ligne.startsWith(serie + " "))
+                .map(ligne -> Double.parseDouble(ligne.substring(serie.length() + 1).split(" ")[0]))
+                .findFirst()
+                .orElse(-1.0);
     }
 
     private HttpResponse<String> lireLesMetriques() throws Exception {

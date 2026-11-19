@@ -12,6 +12,7 @@ import ch.qos.logback.core.read.ListAppender;
 import io.github.abdeljalil59.mutuelle.prelevement.OracleIntegrationTest;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.Decision;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.DecisionPrelevement;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -40,6 +41,8 @@ class JournalDecisionsJdbcTest extends OracleIntegrationTest {
 
     private static JdbcClient jdbcClient;
     private static JdbcTemplate jdbcTemplate;
+    // Vrai registre en mémoire (pas de simulation) : il prouve les noms, les étiquettes et les valeurs des compteurs.
+    private SimpleMeterRegistry registre;
     private JournalDecisionsJdbc journal;
 
     @BeforeAll
@@ -54,7 +57,16 @@ class JournalDecisionsJdbcTest extends OracleIntegrationTest {
     void repart_d_une_table_vide() {
         // La base est partagée avec les autres classes de test (même conteneur) : on repart d'une table vide.
         jdbcClient.sql("DELETE FROM decision_prelevement").update();
-        journal = new JournalDecisionsJdbc(jdbcTemplate);
+        registre = new SimpleMeterRegistry();
+        journal = new JournalDecisionsJdbc(jdbcTemplate, registre);
+    }
+
+    private double decisionsEnregistrees(Decision decision) {
+        return registre.get("prelevement.decisions").tag("decision", decision.name()).counter().count();
+    }
+
+    private double doublonsIgnores() {
+        return registre.get("prelevement.doublons.ignores").counter().count();
     }
 
     private static UUID idEvenement(int numero) {
@@ -151,6 +163,26 @@ class JournalDecisionsJdbcTest extends OracleIntegrationTest {
                 tuple(idEvenement(1).toString(), "adh-en-base", "ACCEPTE"),
                 tuple(idEvenement(2).toString(), "adh-premier", "ACCEPTE"),
                 tuple(idEvenement(3).toString(), "adh3", "ACCEPTE"));
+    }
+
+    // Prouve sur Oracle, à travers JdbcTemplate.batchUpdate, que le MERGE renvoie 1 (inséré) ou 0 (doublon ignoré).
+    @Test
+    void compte_les_decisions_inserees_par_type_et_les_doublons_ignores_d_apres_les_resultats_d_oracle() {
+        journal.enregistrer(List.of(
+                decision(1, "adh1", "50.00", Decision.ACCEPTE),
+                decision(2, "adh2", "150.00", Decision.REJETE),
+                decision(1, "adh-doublon-dans-le-lot", "50.00", Decision.ACCEPTE),
+                decision(3, "adh3", "50.00", Decision.ACCEPTE)));
+        journal.enregistrer(List.of(
+                decision(2, "adh2", "150.00", Decision.REJETE),
+                decision(4, "adh4", "50.00", Decision.ACCEPTE)));
+
+        // 4 lignes insérées : 1, 3 et 4 acceptées, 2 rejetée ; 2 doublons ignorés : 1 dans le lot, 2 déjà en base.
+        assertThat(decisionsEnregistrees(Decision.ACCEPTE)).isEqualTo(3.0);
+        assertThat(decisionsEnregistrees(Decision.REJETE)).isEqualTo(1.0);
+        assertThat(doublonsIgnores()).isEqualTo(2.0);
+        // Les compteurs disent la même chose que la table.
+        assertThat(lignes()).hasSize(4);
     }
 
     @Test

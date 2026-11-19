@@ -4,6 +4,7 @@ import io.github.abdeljalil59.mutuelle.prelevement.adapter.out.jdbc.JournalDecis
 import io.github.abdeljalil59.mutuelle.prelevement.application.TraiterDemandePrelevement;
 import io.github.abdeljalil59.mutuelle.prelevement.application.port.out.JournalDecisions;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.PlafondPrelevement;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
 import java.time.Clock;
 import org.springframework.beans.factory.annotation.Value;
@@ -26,8 +27,8 @@ public class PrelevementConfig {
     }
 
     @Bean
-    JournalDecisions journalDecisions(JdbcTemplate jdbcTemplate) {
-        return new JournalDecisionsJdbc(jdbcTemplate);
+    JournalDecisions journalDecisions(JdbcTemplate jdbcTemplate, MeterRegistry meterRegistry) {
+        return new JournalDecisionsJdbc(jdbcTemplate, meterRegistry);
     }
 
     @Bean
