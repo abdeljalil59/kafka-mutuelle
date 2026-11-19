@@ -1,5 +1,6 @@
 package io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka;
 
+import io.github.abdeljalil59.mutuelle.prelevement.OracleIntegrationTest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -58,7 +59,7 @@ import org.springframework.test.annotation.DirtiesContext;
         "prelevement.kafka.retry-demo.backoff-multiplier=1"})
 @EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
 @DirtiesContext
-class RetryDemoIntegrationTest {
+class RetryDemoIntegrationTest extends OracleIntegrationTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(RetryDemoIntegrationTest.class);
     private static final String TOPIC_SOURCE = "cotisations.emises";

@@ -1,5 +1,6 @@
 package io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka;
 
+import io.github.abdeljalil59.mutuelle.prelevement.OracleIntegrationTest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
@@ -51,7 +52,7 @@ import org.springframework.test.annotation.DirtiesContext;
         "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE})
 @EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
 @DirtiesContext
-class MessageInvalideIntegrationTest {
+class MessageInvalideIntegrationTest extends OracleIntegrationTest {
 
     private static final String TOPIC = "cotisations.emises";
     private static final String TOPIC_REJETS = "cotisations.emises-dlt";

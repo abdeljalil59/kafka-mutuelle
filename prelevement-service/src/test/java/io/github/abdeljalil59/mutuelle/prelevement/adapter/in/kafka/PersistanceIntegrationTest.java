@@ -1,5 +1,6 @@
 package io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka;
 
+import io.github.abdeljalil59.mutuelle.prelevement.OracleIntegrationTest;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.argThat;
@@ -51,11 +52,12 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
         "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE})
 @EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
 @DirtiesContext
-class PersistanceIntegrationTest {
+class PersistanceIntegrationTest extends OracleIntegrationTest {
 
     private static final String TOPIC = "cotisations.emises";
     private static final String TOPIC_REJETS = "cotisations.emises-dlt";
-    private static final String CAUSE_ATTENDUE = "org.springframework.dao.DataIntegrityViolationException";
+    // Oracle : ORA-12899 (valeur trop longue) n est pas classé par Spring parmi les violations d intégrité.
+    private static final String CAUSE_ATTENDUE = "org.springframework.jdbc.UncategorizedSQLException";
     // Délai des appels à l'Admin Kafka : 5 s ne suffisent pas quand la machine est chargée (TimeoutException constatée).
     private static final Duration TIMEOUT_ADMIN = Duration.ofSeconds(30);
 
@@ -64,7 +66,7 @@ class PersistanceIntegrationTest {
     private static final UUID ID_VALIDE_APRES_ECHEC = UUID.fromString("bbbbbbbb-0000-0000-0000-000000000013");
     private static final UUID ID_DIX_LIVRAISONS = UUID.fromString("bbbbbbbb-0000-0000-0000-000000000014");
 
-    // Une vraie erreur H2 : la colonne id_adherent est limitée à 64 caractères.
+    // Une vraie erreur Oracle (ORA-12899) : la colonne id_adherent est limitée à 64 caractères.
     private static final String ID_ADHERENT_TROP_LONG = "x".repeat(65);
 
     // Messages envoyés par toute la classe : référence de l'attente des offsets, quel que soit l'ordre des tests.
