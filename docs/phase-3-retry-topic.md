@@ -12,7 +12,7 @@ Pour chaque point : ce qui est **constaté** (test, sortie réelle, source ou do
 ## 2. Concept
 - **Bloquant (`DefaultErrorHandler`)** : le message en échec est relivré depuis la même partition. **Constaté** : 10 livraisons sans pause (`FixedBackOff(0, 9)`, [phase-3-idempotence.md](phase-3-idempotence.md)). Les messages suivants de la partition attendent : **constaté** pour le message illisible sans protection ([phase-3-message-invalide.md](phase-3-message-invalide.md), section 2), **déduit** pour des réessais avec pause.
 - **Non bloquant** : après un échec, le message est republié avec un horodatage d'échéance sur un topic de retry, et le consommateur passe au suivant. Doc : « The retry topic consumer then checks the timestamp and if it's not due it pauses the consumption for that topic's partition. » Après `attempts` échecs : topic DLT et `@DltHandler`.
-- **Compromis** : l'ordre par clé n'est plus garanti, car un message en retry est dépassé par les suivants (**déduit** du mécanisme ; **non testé**, voir sections 12 et 13).
+- **Compromis** : l'ordre par clé n'est plus garanti, car un message en retry est dépassé par les suivants (**déduit** du mécanisme ; **relevé** en démo live, section 13 ; pas de test automatisé).
 - **Limites de la doc (constatées)** : « Non-blocking retries are not supported with Batch Listeners. » et ils ne se combinent pas avec les transactions de container.
 
 ## 3. Choix d'implémentation
@@ -47,7 +47,7 @@ Pour chaque point : ce qui est **constaté** (test, sortie réelle, source ou do
 ## 6. Topologie
 - **Constaté** (`delay=500`, `multiplier=1`) : exactement 3 topics `cotisations.retry-demo*` à 3 partitions : `cotisations.retry-demo`, `cotisations.retry-demo-retry`, `cotisations.retry-demo-dlt`. Le message en échec passe **deux fois** par l'unique topic de retry (offsets 0 et 1).
 - Cause : `SameIntervalTopicReuseStrategy.SINGLE_TOPIC` par défaut (défaut décodé du jar ; doc 4.1 : « the default behavior is to reuse a single retry topic for the same delay intervals »). Avec un seul topic de retry, le suffixe est le `-retry` nu (bytecode de `getTopicSuffix`, lu avant le test et confirmé par lui).
-- **Déduit, non exécuté** (`multiplier=2`, production) : `-retry-5000` et `-retry-10000`, soit 4 topics (exemple de la doc : 1000, 2000, 4000 donnent `-retry-1000`, `-retry-2000`, `-retry-4000`).
+- **`multiplier=2` (production)** : passages par `retry-5000` puis `retry-10000`, **relevés** en démo live (section 13), comme le laissaient prévoir l'exemple de la doc (1000, 2000, 4000 donnent `-retry-1000`, `-retry-2000`, `-retry-4000`) et le bytecode. Le nombre total de topics (4) reste **déduit** ; aucun test automatisé ne tourne avec ce multiplicateur.
 - **Groupes suffixés (constaté)** : `retry-demo-group` (principal), `retry-demo-group-retry`, `retry-demo-group-dlt` ; offsets commités 1, 2 et 1 (`SuffixingRetryTopicNamesProvider.getGroupId` ajoute le suffixe du topic, bytecode).
 
 ## 7. En-têtes
@@ -60,6 +60,7 @@ Pour chaque point : ce qui est **constaté** (test, sortie réelle, source ou do
 - **Constaté** (3 exécutions) : écart entre les deux passages du topic de retry : **529 ms**, **590 ms**, et **25 ms** quand le message d'origine avait attendu 5,3 s avant son premier échec (démarrage à froid). Écart dernier retry → DLT : 1117, 1125 et 1111 ms pour un délai de 500 ms.
 - **Déduit, non vérifié** : les 25 ms sont compatibles avec un délai ancré sur l'horodatage d'origine ; les ~1,1 s avec la précision best-effort. Aucun test ne lève l'ambiguïté.
 - **Assertion retenue** : le second passage est publié au moins 500 − 100 ms après le message d'origine, vrai dans les deux cas. Les écarts entre étapes ne sont pas assertés.
+- **Relevé en démo live** (broker 4.4.0, délais de production) : écarts de 5 s puis 10 s entre les passages (section 13). Cela ne tranche pas l'ancrage : si le message d'origine est traité sans attente, les deux hypothèses donnent les mêmes écarts (**déduit**).
 
 ## 9. Fabrique dédiée
 - `@RetryableTopic` n'exige pas de fabrique dédiée : par défaut il utilise celle du `@KafkaListener` (doc `retry-topic-lcf.html`), qu'il décore (bytecode). **Déduit** pour notre projet : la fabrique par défaut n'a jamais servi à un `@RetryableTopic` ici.
@@ -78,7 +79,7 @@ Pour chaque point : ce qui est **constaté** (test, sortie réelle, source ou do
 |---|---|---|
 | Retries | Bloquants, sur la même partition (**constaté**, 10 livraisons) | Non bloquants, sur des topics de retry (**constaté**) |
 | Partition pendant les réessais | Occupée (**déduit** avec pause) | Libre (**déduit**) |
-| Ordre par clé | Conservé (**déduit**) | Non garanti (**déduit**, non testé) |
+| Ordre par clé | Conservé (**déduit**) | Non garanti (**relevé** en démo live, section 13) |
 | Délai entre tentatives | Aucun par défaut (**constaté**) | Par topic, `@BackOff` (**constaté**) |
 | Topics créés | Un DLT `<topic>-dlt` | Topics de retry + DLT (**constaté** avec `multiplier=1`) |
 | Groupes | Un | Un par topic, suffixés (**constaté**) |
@@ -92,13 +93,41 @@ Pour chaque point : ce qui est **constaté** (test, sortie réelle, source ou do
 |---|---|---|---|
 | Cohabitation | Démo active : le message illisible va au DLT de la source, l'échec simulé au DLT de la démo ; groupes séparés | | Même topic source pour les deux mécanismes |
 | Fabrique | Bytecode : décorateur, aucun setter sur la fabrique ; octets conservés | `@RetryableTopic` fonctionnerait sur la fabrique par défaut | Essai sur la fabrique par défaut ; `properties` non propagées (lu, non exécuté) |
-| Topologie | `multiplier=1` : 3 topics, un retry réutilisé, groupes suffixés | `multiplier=2` : `-retry-5000` et `-retry-10000` | Exécution avec `multiplier=2` |
+| Topologie | `multiplier=1` : 3 topics, un retry réutilisé, groupes suffixés ; `multiplier=2` : passages par `retry-5000` puis `retry-10000` (relevé en démo live) | Nombre total de topics avec `multiplier=2` (4) | Test automatisé avec `multiplier=2` |
 | En-têtes | Liste relevée (section 7) | | Valeurs de `retry_topic-attempts` et `backoff-timestamp` |
 | Délais | Au moins 500 ms après l'origine ; écarts relevés (section 8) | Ancrage sur l'origine ; ~1,1 s = précision best-effort | Ancrage exact du délai |
-| Ordre par clé | | Perdu avec les retries non bloquants | Test d'ordre (A en échec, B en succès) |
+| Ordre par clé | Relevé en démo live : B traité 11 s avant la fin du parcours de A (même clé) | Perdu avec les retries non bloquants | Test automatisé d'ordre |
 | `@DltHandler` | Un message au DLT, offset commité | Un seul appel | Compteur d'appels |
-| Broker | Broker embarqué 4.2.2 | | Broker 4.4.0 du compose |
+| Broker | Tests automatisés sur le broker embarqué 4.2.2 ; démos live relevées sur le broker 4.4.0 du compose | | Tests automatisés sur le broker 4.4.0 |
 | Stabilité | `TimeoutException` de 5 s sur 2 builds | Aléa de charge | Disparition avec 30 s |
 
-## 13. Démonstrations live
-**Non encore faites.** Prévues, à exécuter par l'utilisateur : (1) lancer `prelevement-service` avec `--prelevement.kafka.retry-demo.actif=true` (délais de production 5 s puis 10 s), produire un message sans puis avec `simulerEchec` sur `cotisations.retry-demo`, observer les logs et Kafka UI ; (2) vérifier la perte d'ordre : un message A en échec puis un message B en succès pour la même clé, B doit être traité avant les réessais de A.
+## 13. Démos live (broker réel 4.4.0)
+Exécutées par l'utilisateur sur le broker `apache/kafka:4.4.0` du compose, démo active (`--prelevement.kafka.retry-demo.actif=true`), délais de production (5 s, multiplicateur 2). **Tout ce qui suit est un relevé de l'utilisateur** (heures locales des logs) : je n'ai pas rejoué les services, et les logs bruts ne sont pas reproduits ici.
+
+### Démo 1 : succès, puis échec avec retries et DLT
+**Message succès (`CLE-OK`)** : traité immédiatement, aucun retry.
+
+**Message échec (`CLE-FAIL`, `simulerEchec=true`)** :
+- 08:49:07 : réception sur le topic principal, échec, republication vers `retry-5000` ;
+- 08:49:12 : réception sur `retry-5000` (+5 s), échec, republication vers `retry-10000` ;
+- 08:49:22 : réception sur `retry-10000` (+10 s), échec, republication vers le DLT ;
+- 08:49:22 : `@DltHandler` exécuté (WARN).
+
+**Constaté (relevé)** : backoff exponentiel ×2 respecté (5 s puis 10 s), 3 tentatives puis DLT.
+
+### Démo 2 : perte d'ordre par clé (`MEME-CLE`)
+Deux messages de même clé : A (`DEMO-A`, `simulerEchec=true`) puis B (`DEMO-B`, `simulerEchec=false`).
+- 08:54:20 : A reçu (offset 1), échec, republication vers `retry-5000` ;
+- 08:54:24 : B reçu (offset 2), traité avec succès, **avant** la fin des retries de A ;
+- 08:54:25 : A sur `retry-5000`, échec, republication vers `retry-10000` ;
+- 08:54:35 : A sur `retry-10000`, échec, republication vers le DLT ;
+- 08:54:36 : A au DLT, échec définitif.
+
+**Constaté (relevé)** : B (offset 2) est traité 11 s avant la fin du parcours de A (offset 1) : la garantie d'ordre par clé est perdue avec `@RetryableTopic`. Le compromis « meilleur débit contre perte d'ordre » reste **déduit** : le débit n'a pas été mesuré.
+
+### Ce que ces démos ne prouvent pas
+- Aucun test automatisé : les relevés ne sont pas rejouables (le test d'ordre reste à écrire).
+- L'ancrage du délai (instant de l'échec ou horodatage d'origine) n'est pas tranché : si le message d'origine est traité sans attente, les deux hypothèses donnent les mêmes écarts (**déduit**).
+
+## 14. Prochaines étapes
+- Démos live de l'étude 1 : rejeu après `--reset-offsets`, panne de la base avec retries puis DLT ([phase-3-idempotence.md](phase-3-idempotence.md), section 8).
