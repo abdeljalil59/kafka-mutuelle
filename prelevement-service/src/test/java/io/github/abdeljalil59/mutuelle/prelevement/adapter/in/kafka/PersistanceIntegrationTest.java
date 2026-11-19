@@ -10,6 +10,7 @@ import static org.mockito.Mockito.verify;
 import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import io.github.abdeljalil59.mutuelle.prelevement.AvroTestUtil;
 import io.github.abdeljalil59.mutuelle.prelevement.application.port.out.JournalDecisions;
+import io.github.abdeljalil59.mutuelle.prelevement.domain.DecisionPrelevement;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
@@ -36,8 +37,11 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.BatchListenerFailedException;
+import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.test.annotation.DirtiesContext;
@@ -81,6 +85,9 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
 
     @Autowired
     private JdbcClient jdbcClient;
+
+    @Autowired
+    private KafkaListenerEndpointRegistry registreDesListeners;
 
     // Espion sur le port : il appelle le vrai adaptateur JDBC et compte les appels.
     @MockitoSpyBean
@@ -153,7 +160,7 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
         assertThat(rejete.getIdEvenement()).isEqualTo(ID_ECHEC);
         assertThat(rejete.getIdAdherent()).isEqualTo(ID_ADHERENT_TROP_LONG);
         assertThat(texte(rejet, "kafka_dlt-original-topic")).isEqualTo(TOPIC);
-        assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(CAUSE_ATTENDUE);
+        assertCauseDeLEchecDansLeRejet(rejet);
     }
 
     @Test
@@ -166,15 +173,84 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
         List<ConsumerRecord<String, byte[]>> rejets = lireLesRejetsDeLaCle(cle);
 
         assertThat(rejets).hasSize(1);
-        // 1 livraison initiale + 9 réessais (FixedBackOff(0, 9)) avant l'envoi au DLT. Le décompte est limité
-        // à cet idEvenement : l'espion est partagé par tous les tests de la classe.
-        verify(journalDecisions, times(10))
-                .enregistrer(argThat(decision -> ID_DIX_LIVRAISONS.equals(decision.idEvenement())));
+        // 1 livraison initiale + 9 réessais (FixedBackOff(0, 9)) avant l'envoi au DLT. Le message est seul dans son
+        // lot : un appel du port par livraison (un lot d'une décision n'est pas rejoué une par une). Le décompte est
+        // limité à cet idEvenement : l'espion est partagé par tous les tests de la classe.
+        verify(journalDecisions, times(10)).enregistrer(argThat(decisions -> contient(decisions, ID_DIX_LIVRAISONS)));
+    }
+
+    @Test
+    void un_lot_de_messages_recus_au_meme_poll_est_ecrit_en_un_seul_appel() throws Exception {
+        String cle = "cle-lot";
+        List<UUID> ids = List.of(idLot(1), idLot(2), idLot(3), idLot(4), idLot(5));
+
+        // Messages envoyés pendant l'arrêt du conteneur : au redémarrage, un seul poll les ramène tous.
+        envoyerPendantArretDuConteneur(cle, ids.stream().map(id -> evenement(id, "adh-lot", "50.00")).toList());
+
+        attendreQueLeGroupeAitToutCommite();
+        ids.forEach(id -> assertThat(nombreDeLignes(id)).isEqualTo(1));
+        // Exactement un appel du port pour ces cinq décisions, dans l'ordre des messages.
+        verify(journalDecisions).enregistrer(argThat(decisions -> ids.equals(idsDe(decisions))));
+    }
+
+    @Test
+    void echec_au_milieu_d_un_lot_ecrit_les_voisins_et_envoie_seul_le_message_en_echec_au_dlt() throws Exception {
+        String cle = "cle-lot-echec";
+        UUID avant = idLot(11);
+        UUID enEchec = idLot(12);
+        UUID apres = idLot(13);
+
+        envoyerPendantArretDuConteneur(cle, List.of(
+                evenement(avant, "adh-avant", "50.00"),
+                evenement(enEchec, ID_ADHERENT_TROP_LONG, "50.00"),
+                evenement(apres, "adh-apres", "50.00")));
+
+        attendreQueLeGroupeAitToutCommite();
+        List<ConsumerRecord<String, byte[]>> rejets = lireLesRejetsDeLaCle(cle);
+
+        assertThat(nombreDeLignes(avant)).isEqualTo(1);
+        assertThat(nombreDeLignes(enEchec)).isZero();
+        assertThat(nombreDeLignes(apres)).isEqualTo(1);
+        assertThat(rejets).hasSize(1);
+        assertThat(AvroTestUtil.decoder(TOPIC_REJETS, rejets.get(0).value()).getIdEvenement()).isEqualTo(enEchec);
+        assertCauseDeLEchecDansLeRejet(rejets.get(0));
+    }
+
+    // Listener batch : le recoverer reçoit l'exception enveloppée, la cause directe est BatchListenerFailedException
+    // (constaté) ; l'erreur Oracle d'origine reste lisible dans la trace conservée par le DLT.
+    private static void assertCauseDeLEchecDansLeRejet(ConsumerRecord<String, byte[]> rejet) {
+        assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(BatchListenerFailedException.class.getName());
+        assertThat(texte(rejet, "kafka_dlt-exception-stacktrace")).contains("Caused by: " + CAUSE_ATTENDUE);
     }
 
     private void envoyer(String cle, CotisationEmise evenement) throws Exception {
         producteur.send(TOPIC, cle, evenement).get(10, TimeUnit.SECONDS);
         MESSAGES_ENVOYES.incrementAndGet();
+    }
+
+    // Le conteneur est arrêté pendant l'envoi puis redémarré : le premier poll qui suit reçoit tous les messages
+    // (même clé, donc même partition) et le listener batch les reçoit en une seule liste.
+    private void envoyerPendantArretDuConteneur(String cle, List<CotisationEmise> evenements) throws Exception {
+        registreDesListeners.getListenerContainers().forEach(MessageListenerContainer::stop);
+        try {
+            for (CotisationEmise evenement : evenements) {
+                envoyer(cle, evenement);
+            }
+        } finally {
+            registreDesListeners.getListenerContainers().forEach(MessageListenerContainer::start);
+        }
+    }
+
+    private static UUID idLot(int numero) {
+        return UUID.fromString(String.format("bbbbbbbb-0000-0000-0000-%012d", 100 + numero));
+    }
+
+    private static List<UUID> idsDe(List<DecisionPrelevement> decisions) {
+        return decisions.stream().map(DecisionPrelevement::idEvenement).toList();
+    }
+
+    private static boolean contient(List<DecisionPrelevement> decisions, UUID idEvenement) {
+        return idsDe(decisions).contains(idEvenement);
     }
 
     private static CotisationEmise evenement(UUID idEvenement, String idAdherent, String montant) {

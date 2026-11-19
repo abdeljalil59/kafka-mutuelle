@@ -37,6 +37,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.listener.BatchListenerFailedException;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -150,7 +151,11 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
         assertThat(rejets).hasSize(1);
         ConsumerRecord<String, byte[]> rejet = rejets.get(0);
         assertThat(AvroTestUtil.decoder(TOPIC_REJETS, rejet.value())).isEqualTo(montantNegatif);
-        assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(PrelevementInvalideException.class.getName());
+        // Listener batch : le recoverer reçoit l'exception enveloppée, la cause directe est BatchListenerFailedException
+        // (constaté) ; la cause d'origine reste lisible dans la trace conservée par le DLT.
+        assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(BatchListenerFailedException.class.getName());
+        assertThat(texte(rejet, "kafka_dlt-exception-stacktrace"))
+                .contains("Caused by: " + PrelevementInvalideException.class.getName());
     }
 
     private SendResult<String, byte[]> envoyer(String cle, byte[] valeur) throws Exception {

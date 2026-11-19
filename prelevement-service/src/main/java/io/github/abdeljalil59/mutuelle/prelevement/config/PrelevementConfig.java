@@ -9,7 +9,7 @@ import java.time.Clock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @Configuration
 public class PrelevementConfig {
@@ -26,8 +26,8 @@ public class PrelevementConfig {
     }
 
     @Bean
-    JournalDecisions journalDecisions(JdbcClient jdbcClient) {
-        return new JournalDecisionsJdbc(jdbcClient);
+    JournalDecisions journalDecisions(JdbcTemplate jdbcTemplate) {
+        return new JournalDecisionsJdbc(jdbcTemplate);
     }
 
     @Bean
