@@ -1,9 +1,11 @@
 spring:
   kafka:
     bootstrap-servers: localhost:9092
-    properties:
-      # Schema Registry du compose (port hôte 8082), lu par le désérialiseur Avro.
-      schema.registry.url: http://localhost:8082
+    # Producteur de relances : clé et valeur en chaînes (le JSON est sérialisé par Jackson avant l'envoi), SANS transaction
+    # Kafka (D9) : ce service consomme et persiste dans H2, la relance est un simple envoi confirmé (voir TraiterRejet).
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
     consumer:
       group-id: impaye-service
       # prelevements.resultats est écrit par un producteur TRANSACTIONNEL (prelevement-service) : read_committed ne
@@ -17,6 +19,9 @@ spring:
       properties:
         spring.deserializer.value.delegate.class: io.confluent.kafka.serializers.KafkaAvroDeserializer
         specific.avro.reader: true
+        # Schema Registry du compose (port hôte 8082), lu par le désérialiseur Avro : propre au consommateur, le
+        # producteur de relances n'en a pas besoin.
+        schema.registry.url: http://localhost:8082
         # Le topic appartient à prelevement-service, qui le crée avec 3 partitions. Par défaut (true), un consommateur qui
         # s'abonne à un topic absent le fait créer par le broker avec SA partition par défaut (doc kafka-clients) :
         # ce service, démarré le premier, en ferait un topic à une partition.
@@ -48,3 +53,12 @@ kafka:
 impaye:
   kafka:
     topic: prelevements.resultats
+    # Relances émises par ce service (clé idAdherent), créé au démarrage avec 3 partitions comme les autres topics.
+    relances:
+      topic: impayes.relances
+      delai-publication-ms: 10000   # attente de la confirmation du broker
+
+app:
+  relance:
+    # Une relance est émise quand le nombre de rejets d'un adhérent atteint exactement ce seuil (une fois par adhérent).
+    seuil: 3

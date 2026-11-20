@@ -73,7 +73,9 @@ class PersistanceImpayeJdbcTest {
 
     @Test
     void enregistre_l_impaye_avec_ses_valeurs_et_l_instant_d_enregistrement() {
-        persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));
+        boolean enregistre = persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));
+
+        assertThat(enregistre).isTrue();
 
         assertThat(lignes()).singleElement().satisfies(ligne -> {
             assertThat(ligne.idEvenement()).isEqualTo(ID.toString());
@@ -98,8 +100,8 @@ class PersistanceImpayeJdbcTest {
     void ignore_un_doublon_sans_exception_le_compte_et_conserve_la_premiere_ligne() {
         persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));
 
-        assertThatCode(() -> persistance.enregistrer(
-                new Impaye(ID, "adh-autre", new BigDecimal("999.99"), DECIDE_LE.plusSeconds(60))))
+        assertThatCode(() -> assertThat(persistance.enregistrer(
+                new Impaye(ID, "adh-autre", new BigDecimal("999.99"), DECIDE_LE.plusSeconds(60)))).isFalse())
                 .doesNotThrowAnyException();
 
         assertThat(lignes()).singleElement().satisfies(ligne -> {
@@ -107,6 +109,19 @@ class PersistanceImpayeJdbcTest {
             assertThat(ligne.montant()).isEqualByComparingTo("150.00");
         });
         assertThat(doublonsIgnores()).isEqualTo(1.0);
+    }
+
+    // Le décompte de la relance : une ligne par impayé, donc un doublon ne le fait pas bouger.
+    @Test
+    void compte_les_impayes_par_adherent_sans_compter_les_doublons() {
+        persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));
+        persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));
+        persistance.enregistrer(new Impaye(UUID.randomUUID(), "adh1", new BigDecimal("120.00"), DECIDE_LE));
+        persistance.enregistrer(new Impaye(UUID.randomUUID(), "adh2", new BigDecimal("110.00"), DECIDE_LE));
+
+        assertThat(persistance.compterParAdherent("adh1")).isEqualTo(2);
+        assertThat(persistance.compterParAdherent("adh2")).isEqualTo(1);
+        assertThat(persistance.compterParAdherent("adh-inconnu")).isZero();
     }
 
     @Test

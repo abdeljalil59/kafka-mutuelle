@@ -10,3 +10,6 @@ CREATE TABLE IF NOT EXISTS impaye (
     enregistre_le TIMESTAMP WITH TIME ZONE NOT NULL,
     CONSTRAINT uq_impaye_id_evenement UNIQUE (id_evenement)
 );
+
+-- Le nombre d'impayés par adhérent décide de la relance : un COUNT par adhérent à chaque rejet nouveau.
+CREATE INDEX IF NOT EXISTS idx_impaye_id_adherent ON impaye (id_adherent);

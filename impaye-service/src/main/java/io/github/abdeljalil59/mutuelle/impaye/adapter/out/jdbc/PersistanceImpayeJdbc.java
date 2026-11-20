@@ -14,6 +14,7 @@ public class PersistanceImpayeJdbc implements PersistanceImpaye {
 
     private static final String INSERTION = "INSERT INTO impaye (id_evenement, id_adherent, montant, decide_le, enregistre_le) "
             + "VALUES (?, ?, ?, ?, ?)";
+    private static final String COMPTAGE = "SELECT COUNT(*) FROM impaye WHERE id_adherent = ?";
 
     private final JdbcClient jdbcClient;
     private final Clock clock;
@@ -31,7 +32,7 @@ public class PersistanceImpayeJdbc implements PersistanceImpaye {
     // et l'écriture. La connexion est en validation automatique : l'échec de l'INSERT ne laisse rien à annuler. Dans une
     // base où une erreur annule la transaction en cours (PostgreSQL), il faudrait un MERGE ou ON CONFLICT à la place.
     @Override
-    public void enregistrer(Impaye impaye) {
+    public boolean enregistrer(Impaye impaye) {
         try {
             jdbcClient.sql(INSERTION)
                     .params(impaye.idEvenement().toString(),
@@ -40,8 +41,15 @@ public class PersistanceImpayeJdbc implements PersistanceImpaye {
                             OffsetDateTime.ofInstant(impaye.decideLe(), ZoneOffset.UTC),
                             OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC))
                     .update();
+            return true;
         } catch (DuplicateKeyException doublon) {
             doublonsIgnores.increment();
+            return false;
         }
+    }
+
+    @Override
+    public long compterParAdherent(String idAdherent) {
+        return jdbcClient.sql(COMPTAGE).param(idAdherent).query(Long.class).single();
     }
 }
