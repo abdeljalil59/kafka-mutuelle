@@ -322,8 +322,8 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "Latence du listener (par lot)",
-      "description": "Durée d'un appel du listener, par LOT de messages reçus au même poll (le timer spring.kafka.listener est enregistré une fois par appel, pas par message). Moyenne = rate(somme)/rate(nombre) sur 1 minute ; maximum = valeur max Micrometer. Vide tant qu'aucun lot n'a été traité.",
+      "title": "Latence du listener (par message)",
+      "description": "Durée d'un appel du listener, par MESSAGE : le listener est en mode record depuis l'étape 2, donc le timer spring.kafka.listener est enregistré une fois par message et chaque appel est une transaction Kafka. Moyenne = rate(somme)/rate(nombre) sur 1 minute ; maximum = valeur max Micrometer. Vide tant qu'aucun message n'a été traité.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

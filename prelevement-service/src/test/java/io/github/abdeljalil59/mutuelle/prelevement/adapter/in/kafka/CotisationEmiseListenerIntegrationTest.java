@@ -59,6 +59,11 @@ import org.springframework.test.annotation.DirtiesContext;
 class CotisationEmiseListenerIntegrationTest extends OracleIntegrationTest {
 
     private static final String TOPIC = "cotisations.emises";
+    // Plafond des attentes (Awaitility rend la main dès que la condition est vraie : ce n'est pas un délai ajouté). Le
+    // premier message d'un contexte paie le démarrage à froid du traitement transactionnel : initialisation du producteur
+    // transactionnel (2 s puis 6,9 s relevées dans deux builds) puis première invocation du listener (8 s relevées), soit
+    // 16 à 24 s avant la première décision sur une machine chargée. 15 s expiraient de façon reproductible.
+    private static final Duration ATTENTE_MAX = Duration.ofSeconds(60);
     // Messages envoyés par toute la classe : sert de référence au test de commit, quel que soit l'ordre des tests.
     private static final AtomicInteger MESSAGES_ENVOYES = new AtomicInteger();
 
@@ -134,7 +139,7 @@ class CotisationEmiseListenerIntegrationTest extends OracleIntegrationTest {
         }
 
         // Le commit (AckMode BATCH) suit le traitement : on attend qu'il soit visible côté broker.
-        await().atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(200))
+        await().atMost(ATTENTE_MAX).pollInterval(Duration.ofMillis(200))
                 .untilAsserted(() -> assertThat(sommeDesOffsetsCommites()).isEqualTo(MESSAGES_ENVOYES.get()));
     }
 
@@ -145,7 +150,7 @@ class CotisationEmiseListenerIntegrationTest extends OracleIntegrationTest {
         attendreDecision("adh-metriques");
 
         // Le timer du listener est enregistré juste après le retour du listener : on attend qu'il apparaisse.
-        await().atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> {
+        await().atMost(ATTENTE_MAX).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> {
             HttpResponse<String> reponse = lireLesMetriques();
 
             assertThat(reponse.statusCode()).isEqualTo(200);
@@ -197,7 +202,7 @@ class CotisationEmiseListenerIntegrationTest extends OracleIntegrationTest {
 
     // Ligne de journal de la décision pour cette clé (l'espace final évite de confondre deux clés préfixées).
     private String attendreDecision(String cle) {
-        return await().atMost(Duration.ofSeconds(15)).pollInterval(Duration.ofMillis(100))
+        return await().atMost(ATTENTE_MAX).pollInterval(Duration.ofMillis(100))
                 .until(() -> journal.list.stream()
                                 .map(ILoggingEvent::getFormattedMessage)
                                 .filter(ligne -> ligne.contains("cle=" + cle + " "))
