@@ -472,7 +472,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "Messages envoyés au DLT",
-      "description": "Envois réussis vers cotisations.emises-dlt sur 5 minutes (timer du KafkaTemplate du recoverer, spring_kafka_template_seconds_count, result=success). Dans prelevement-service, ce template ne sert qu'au DLT ; si la démo @RetryableTopic est activée, ses envois s'ajoutent à cette série.",
+      "description": "Envois réussis vers cotisations.emises-dlt sur 5 minutes (timer du KafkaTemplate du recoverer, spring_kafka_template_seconds_count, result=success). Filtré sur name=kafkaTemplate : les envois du template des résultats (resultatsKafkaTemplate, topic prelevements.resultats) sont exclus. Si la démo @RetryableTopic est activée, ses envois s'ajoutent à cette série (elle utilise le même template).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -490,7 +490,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(spring_kafka_template_seconds_count{job=\"prelevement-service\",result=\"success\"}[5m])",
+          "expr": "increase(spring_kafka_template_seconds_count{job=\"prelevement-service\",name=\"kafkaTemplate\",result=\"success\"}[5m])",
           "legendFormat": "envoyés au DLT",
           "range": true,
           "instant": false
@@ -529,7 +529,7 @@
       "id": 12,
       "type": "timeseries",
       "title": "Échecs d'envoi au DLT",
-      "description": "Envois vers le DLT en échec (result=failure) sur 5 minutes. La série n'existe qu'après un premier échec : « No data » est normal tant qu'aucun envoi n'a échoué. Un échec d'envoi laisse le message en cours : il est redélivré et repasse par les réessais.",
+      "description": "Envois vers le DLT en échec (result=failure) sur 5 minutes. Filtré sur name=kafkaTemplate : les échecs du template des résultats (resultatsKafkaTemplate) sont exclus. La série n'existe qu'après un premier échec : « No data » est normal tant qu'aucun envoi n'a échoué. Un échec d'envoi laisse le message en cours : il est redélivré et repasse par les réessais.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -547,7 +547,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(spring_kafka_template_seconds_count{job=\"prelevement-service\",result=\"failure\"}[5m])",
+          "expr": "increase(spring_kafka_template_seconds_count{job=\"prelevement-service\",name=\"kafkaTemplate\",result=\"failure\"}[5m])",
           "legendFormat": "envois en échec",
           "range": true,
           "instant": false
