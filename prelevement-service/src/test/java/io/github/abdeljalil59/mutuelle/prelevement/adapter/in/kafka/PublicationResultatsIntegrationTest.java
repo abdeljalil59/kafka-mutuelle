@@ -1,5 +1,9 @@
 package io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka;
 
+import static io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka.SupportIntegration.decisionEnBase;
+import static io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka.SupportIntegration.evenement;
+import static io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka.SupportIntegration.nombreDeLignes;
+import static io.github.abdeljalil59.mutuelle.prelevement.adapter.in.kafka.SupportIntegration.texte;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
@@ -16,9 +20,7 @@ import io.github.abdeljalil59.mutuelle.prelevement.AvroTestUtil;
 import io.github.abdeljalil59.mutuelle.prelevement.OracleIntegrationTest;
 import io.github.abdeljalil59.mutuelle.prelevement.application.PublicationResultatImpossibleException;
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -34,7 +36,6 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.junit.jupiter.api.AfterEach;
@@ -132,8 +133,8 @@ class PublicationResultatsIntegrationTest extends OracleIntegrationTest {
         assertThat(resultat.getMontant()).isEqualTo(new BigDecimal("75.00"));
         assertThat(resultat.getIdEvenement()).isEqualTo(idEvenement);
         assertThat(resultat.getDecideLe()).isNotNull();
-        assertThat(nombreDeLignes(idEvenement)).isEqualTo(1);
-        assertThat(decisionEnBase(idEvenement)).isEqualTo("ACCEPTE");
+        assertThat(nombreDeLignes(jdbcClient, idEvenement)).isEqualTo(1);
+        assertThat(decisionEnBase(jdbcClient, idEvenement)).isEqualTo("ACCEPTE");
     }
 
     @Test
@@ -154,7 +155,7 @@ class PublicationResultatsIntegrationTest extends OracleIntegrationTest {
         assertThat(resultat.getMontant()).isEqualTo(new BigDecimal("150.00"));
         assertThat(resultat.getIdEvenement()).isEqualTo(idEvenement);
         assertThat(resultat.getDecideLe()).isNotNull();
-        assertThat(decisionEnBase(idEvenement)).isEqualTo("REJETE");
+        assertThat(decisionEnBase(jdbcClient, idEvenement)).isEqualTo("REJETE");
     }
 
     // D4 : le MERGE ignore le doublon, mais la décision est republiée, avec le même idEvenement et le même type.
@@ -174,7 +175,7 @@ class PublicationResultatsIntegrationTest extends OracleIntegrationTest {
         assertThat(resultats).hasSize(2);
         assertThat(resultats).extracting(message -> message.value().getIdEvenement()).containsOnly(idEvenement);
         assertThat(resultats).extracting(message -> message.value().getType()).containsOnly(TypeResultat.ACCEPTE);
-        assertThat(nombreDeLignes(idEvenement)).isEqualTo(1);
+        assertThat(nombreDeLignes(jdbcClient, idEvenement)).isEqualTo(1);
     }
 
     // D14, reproductible : l'envoi sur prelevements.resultats échoue à chaque livraison, après le MERGE. Le message est
@@ -202,31 +203,13 @@ class PublicationResultatsIntegrationTest extends OracleIntegrationTest {
         assertThat(texte(rejets.get(0), "kafka_dlt-exception-cause-fqcn"))
                 .isEqualTo(PublicationResultatImpossibleException.class.getName());
         // Écrit avant la publication, donc conservé malgré l'échec ; aucun résultat n'est sorti.
-        assertThat(nombreDeLignes(idEvenement)).isEqualTo(1);
+        assertThat(nombreDeLignes(jdbcClient, idEvenement)).isEqualTo(1);
         assertThat(lireLesResultatsDeLaCle(adherent)).isEmpty();
     }
 
     private void envoyer(String cle, CotisationEmise evenement) throws Exception {
         producteur.send(TOPIC, cle, evenement).get(10, TimeUnit.SECONDS);
         MESSAGES_ENVOYES.incrementAndGet();
-    }
-
-    private static CotisationEmise evenement(UUID idEvenement, String idAdherent, String montant) {
-        return AvroTestUtil.evenement(idEvenement, idAdherent, montant, Instant.parse("2026-11-20T08:00:00Z"));
-    }
-
-    private int nombreDeLignes(UUID idEvenement) {
-        return jdbcClient.sql("SELECT COUNT(*) FROM decision_prelevement WHERE id_evenement = ?")
-                .param(idEvenement.toString())
-                .query(Integer.class)
-                .single();
-    }
-
-    private String decisionEnBase(UUID idEvenement) {
-        return jdbcClient.sql("SELECT decision FROM decision_prelevement WHERE id_evenement = ?")
-                .param(idEvenement.toString())
-                .query(String.class)
-                .single();
     }
 
     // Chaque message envoyé (traité ou rejeté) doit être dépassé par le groupe : les offsets commités valent ensemble le
@@ -280,12 +263,6 @@ class PublicationResultatsIntegrationTest extends OracleIntegrationTest {
         proprietes.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         proprietes.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, deserialiseurDeValeur);
         return proprietes;
-    }
-
-    private static String texte(ConsumerRecord<?, ?> rejet, String entete) {
-        Header header = rejet.headers().lastHeader(entete);
-        assertThat(header).as("en-tête %s", entete).isNotNull();
-        return new String(header.value(), StandardCharsets.UTF_8);
     }
 
     private long sommeDesOffsetsCommites() throws Exception {
