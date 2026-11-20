@@ -42,6 +42,15 @@ management:
       exposure:
         include: health,metrics,prometheus
 
+# Réessais de la consommation avant l'envoi au topic de rejets (DefaultErrorHandler, ExponentialBackOffWithMaxRetries) :
+# 4 réessais à 1 s, 2 s, 4 s puis 8 s, soit 5 livraisons et 15 s au plus. initial-interval en millisecondes.
+# Une PrelevementInvalideException et un message illisible ne sont jamais réessayés (1 livraison).
+kafka:
+  error-handler:
+    initial-interval: 1000
+    multiplier: 2.0
+    max-retries: 4
+
 prelevement:
   plafond: 100.00
   kafka:

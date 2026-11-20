@@ -41,6 +41,8 @@ import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.BatchListenerFailedException;
+import org.springframework.kafka.listener.CommonErrorHandler;
+import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -51,9 +53,13 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 // Le test ne doit jamais atteindre le broker du compose (localhost:9092) : voir le garde-fou.
 // Aucune lecture de logs : la base, le topic de rejets et les offsets commités du groupe suffisent.
 // Les événements sont de l'Avro (registre factice mock://), le rejet d'une exception du listener aussi.
+// Pauses de réessai ramenées de 1000 à 10 ms (10, 20, 40, 80 ms) pour ne pas attendre 15 s par échec : le nombre de
+// livraisons ne dépend pas de la durée des pauses. Les vraies pauses (1, 2, 4, 8 s) sont vérifiées sur le BackOff,
+// dans ErreursKafkaConfigTest, à partir de application.yml.
 @SpringBootTest(properties = {
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
-        "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE})
+        "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE,
+        "kafka.error-handler.initial-interval=10"})
 @EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
 @DirtiesContext
 class PersistanceIntegrationTest extends OracleIntegrationTest {
@@ -68,7 +74,7 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
     private static final UUID ID_DOUBLON = UUID.fromString("bbbbbbbb-0000-0000-0000-000000000011");
     private static final UUID ID_ECHEC = UUID.fromString("bbbbbbbb-0000-0000-0000-000000000012");
     private static final UUID ID_VALIDE_APRES_ECHEC = UUID.fromString("bbbbbbbb-0000-0000-0000-000000000013");
-    private static final UUID ID_DIX_LIVRAISONS = UUID.fromString("bbbbbbbb-0000-0000-0000-000000000014");
+    private static final UUID ID_CINQ_LIVRAISONS = UUID.fromString("bbbbbbbb-0000-0000-0000-000000000014");
 
     // Une vraie erreur Oracle (ORA-12899) : la colonne id_adherent est limitée à 64 caractères.
     private static final String ID_ADHERENT_TROP_LONG = "x".repeat(65);
@@ -79,6 +85,7 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
     private DefaultKafkaProducerFactory<String, CotisationEmise> usine;
     private KafkaTemplate<String, CotisationEmise> producteur;
     private KafkaConsumer<String, byte[]> consommateurRejets;
+    private CompteurDeLivraisons livraisons;
 
     @Autowired
     private EmbeddedKafkaBroker embeddedKafka;
@@ -88,6 +95,10 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
 
     @Autowired
     private KafkaListenerEndpointRegistry registreDesListeners;
+
+    // Le même gestionnaire que celui du conteneur : on y pose un RetryListener pour compter les livraisons.
+    @Autowired
+    private CommonErrorHandler gestionnaireErreurs;
 
     // Espion sur le port : il appelle le vrai adaptateur JDBC et compte les appels.
     @MockitoSpyBean
@@ -108,6 +119,9 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
         usine = AvroTestUtil.usineAvro(embeddedKafka);
         producteur = new KafkaTemplate<>(usine);
 
+        livraisons = new CompteurDeLivraisons();
+        ((DefaultErrorHandler) gestionnaireErreurs).setRetryListeners(livraisons);
+
         // Lecteur du DLT : sans commit ; ses partitions sont assignées à la demande (voir lireLesRejetsDeLaCle).
         consommateurRejets = new KafkaConsumer<>(Map.<String, Object>of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, embeddedKafka.getBrokersAsString(),
@@ -118,6 +132,7 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
 
     @AfterEach
     void libere_le_producteur_et_le_consommateur() {
+        ((DefaultErrorHandler) gestionnaireErreurs).setRetryListeners();
         consommateurRejets.close();
         usine.destroy();
     }
@@ -164,19 +179,22 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
     }
 
     @Test
-    void dix_livraisons_avant_dlt() throws Exception {
-        String cle = "cle-dix-livraisons";
+    void cinq_livraisons_avant_dlt() throws Exception {
+        String cle = "cle-cinq-livraisons";
 
-        envoyer(cle, evenement(ID_DIX_LIVRAISONS, ID_ADHERENT_TROP_LONG, "50.00"));
+        envoyer(cle, evenement(ID_CINQ_LIVRAISONS, ID_ADHERENT_TROP_LONG, "50.00"));
 
         attendreQueLeGroupeAitToutCommite();
         List<ConsumerRecord<String, byte[]>> rejets = lireLesRejetsDeLaCle(cle);
 
         assertThat(rejets).hasSize(1);
-        // 1 livraison initiale + 9 réessais (FixedBackOff(0, 9)) avant l'envoi au DLT. Le message est seul dans son
-        // lot : un appel du port par livraison (un lot d'une décision n'est pas rejoué une par une). Le décompte est
-        // limité à cet idEvenement : l'espion est partagé par tous les tests de la classe.
-        verify(journalDecisions, times(10)).enregistrer(argThat(decisions -> contient(decisions, ID_DIX_LIVRAISONS)));
+        // 1 livraison initiale + 4 réessais (ExponentialBackOffWithMaxRetries, kafka.error-handler.max-retries) avant
+        // l'envoi au DLT. Le message est seul dans son lot : un appel du port par livraison (un lot d'une décision n'est
+        // pas rejoué une par une). Le décompte est limité à cet idEvenement : l'espion est partagé par tous les tests
+        // de la classe. Deux mesures indépendantes : les appels du port, et les notifications du RetryListener.
+        verify(journalDecisions, times(5)).enregistrer(argThat(decisions -> contient(decisions, ID_CINQ_LIVRAISONS)));
+        assertThat(livraisons.livraisonsEchouees(cle)).as(livraisons.toString()).isEqualTo(5);
+        assertThat(livraisons.envoisAuTopicDeRejets(cle)).as(livraisons.toString()).isEqualTo(1);
     }
 
     @Test

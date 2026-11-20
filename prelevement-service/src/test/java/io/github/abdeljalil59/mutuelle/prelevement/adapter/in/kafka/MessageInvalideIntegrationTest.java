@@ -19,11 +19,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
@@ -38,6 +40,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.listener.BatchListenerFailedException;
+import org.springframework.kafka.listener.CommonErrorHandler;
+import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -67,9 +71,14 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
     private DefaultKafkaProducerFactory<String, CotisationEmise> usineAvro;
     private KafkaTemplate<String, CotisationEmise> producteurAvro;
     private KafkaConsumer<String, byte[]> consommateurRejets;
+    private CompteurDeLivraisons livraisons;
 
     @Autowired
     private EmbeddedKafkaBroker embeddedKafka;
+
+    // Le même gestionnaire que celui du conteneur : on y pose un RetryListener pour compter les livraisons.
+    @Autowired
+    private CommonErrorHandler gestionnaireErreurs;
 
     @Value("${spring.kafka.bootstrap-servers}")
     private String bootstrapServers;
@@ -91,6 +100,9 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
         usineAvro = AvroTestUtil.usineAvro(embeddedKafka);
         producteurAvro = new KafkaTemplate<>(usineAvro);
 
+        livraisons = new CompteurDeLivraisons();
+        ((DefaultErrorHandler) gestionnaireErreurs).setRetryListeners(livraisons);
+
         // Lecteur du DLT : sans commit ; ses partitions sont assignées à la demande (voir lireLesRejetsDeLaCle).
         consommateurRejets = new KafkaConsumer<>(Map.<String, Object>of(
                 ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, embeddedKafka.getBrokersAsString(),
@@ -101,6 +113,7 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
 
     @AfterEach
     void libere_le_producteur_et_le_consommateur() {
+        ((DefaultErrorHandler) gestionnaireErreurs).setRetryListeners();
         consommateurRejets.close();
         usine.destroy();
         usineAvro.destroy();
@@ -130,6 +143,9 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
         assertThat(texte(rejet, "kafka_dlt-exception-fqcn"))
                 .isEqualTo("org.springframework.kafka.support.serializer.DeserializationException");
         assertThat(rejet.headers().lastHeader("springDeserializerExceptionValue")).isNull();
+        // Fatal (DeserializationException) : une seule livraison, puis l'envoi au topic de rejets, sans réessai.
+        assertThat(livraisons.livraisonsEchouees(cle)).as(livraisons.toString()).isEqualTo(1);
+        assertThat(livraisons.envoisAuTopicDeRejets(cle)).as(livraisons.toString()).isEqualTo(1);
     }
 
     // Avec le JSON, le constructeur du record rejetait un montant négatif à la désérialisation (DeserializationException,
@@ -156,6 +172,23 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
         assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(BatchListenerFailedException.class.getName());
         assertThat(texte(rejet, "kafka_dlt-exception-stacktrace"))
                 .contains("Caused by: " + PrelevementInvalideException.class.getName());
+        // Non réessayable (addNotRetryableExceptions), y compris enveloppée dans BatchListenerFailedException : une seule
+        // livraison, puis l'envoi au topic de rejets. Ce point n'était pas vérifié en mode batch avant ce test.
+        assertThat(livraisons.livraisonsEchouees(cle)).as(livraisons.toString()).isEqualTo(1);
+        assertThat(livraisons.envoisAuTopicDeRejets(cle)).as(livraisons.toString()).isEqualTo(1);
+    }
+
+    // La rétention de 30 jours est posée à la CRÉATION du topic par le bean NewTopic (le service crée le topic de rejets).
+    @Test
+    void le_topic_de_rejets_est_cree_avec_une_retention_de_30_jours() throws Exception {
+        try (Admin admin = Admin.create(Map.<String, Object>of(
+                AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, embeddedKafka.getBrokersAsString()))) {
+            ConfigResource topic = new ConfigResource(ConfigResource.Type.TOPIC, TOPIC_REJETS);
+            Config config = admin.describeConfigs(List.of(topic)).all()
+                    .get(TIMEOUT_ADMIN.toSeconds(), TimeUnit.SECONDS).get(topic);
+
+            assertThat(config.get("retention.ms").value()).isEqualTo("2592000000");
+        }
     }
 
     private SendResult<String, byte[]> envoyer(String cle, byte[] valeur) throws Exception {
