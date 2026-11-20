@@ -2,6 +2,9 @@
 
 > Document pédagogique pour le projet kafka-mutuelle.
 > Objectif : comprendre les transactions Kafka et savoir en parler en entretien technique.
+>
+> **Mis à jour le 20/11/2026** : le §1, la fin du §5 et le §8 décrivent l'état réel du projet (transactions activées sur
+> `prelevement-service`, preuves d'intégration, `impaye-service`). Les autres sections sont pédagogiques et inchangées.
 
 ## 1. Le problème : pourquoi at-least-once ne suffit pas toujours
 
@@ -13,7 +16,7 @@ Dans un pipeline `read → process → write`, trois sémantiques existent :
 | At-least-once | Commit de l'offset après le traitement | Doublon si le commit plante après le traitement |
 | Exactly-once | Traitement et commit atomiques | Aucun (dans le périmètre Kafka) |
 
-**Dans kafka-mutuelle aujourd'hui** : le prelevement-service fonctionne en at-least-once. L'idempotence applicative (clé primaire `id_evenement`, l'UUID de l'événement, écriture par `MERGE ... WHEN NOT MATCHED THEN INSERT` : un doublon est ignoré) protège contre les doublons en base. C'est suffisant pour notre cas.
+**Dans kafka-mutuelle aujourd'hui** : `prelevement-service` lit `cotisations.emises`, écrit la décision dans Oracle puis publie le résultat sur `prelevements.resultats`, **dans une transaction Kafka** (§8) : pour le passage d'un topic à l'autre, la lecture, le résultat et l'offset sont atomiques. **Vers Oracle, l'écriture reste at-least-once** : Oracle ne participe pas à la transaction Kafka. C'est l'idempotence applicative (clé primaire `id_evenement`, l'UUID de l'événement, écriture par `MERGE ... WHEN NOT MATCHED THEN INSERT` : un doublon est ignoré) qui protège contre les doublons en base. `cotisation-service` publie en at-least-once (outbox).
 
 Mais l'idempotence applicative a des limites :
 - Elle doit être codée pour chaque opération (contrainte UNIQUE, MERGE)
@@ -135,7 +138,7 @@ public void process(List<Thing> things) {
 | Synchronisation Spring | @Transactional + KafkaTransactionManager | Faible | Best-effort (fenêtre de risque au commit) |
 | XA / 2PC | Transaction distribuée JTA | Élevée | Exactly-once théorique (mais fragile et lent) |
 
-**kafka-mutuelle utilise l'approche 1** (idempotence applicative) côté prelevement-service : c'est le choix pragmatique, simple, testable, suffisant quand le coût d'un doublon est faible (un doublon ignoré par le MERGE). **Côté cotisation-service, il utilise aussi l'outbox**, avec un relais planifié et non Debezium : la publication y est at-least-once (voir [phase-3-outbox.md](phase-3-outbox.md)), le doublon éventuel étant absorbé en aval par l'idempotence du consommateur.
+**kafka-mutuelle combine deux approches côté prelevement-service** : l'idempotence applicative (approche 1) pour l'écriture dans Oracle, et la transaction Kafka pour le passage de `cotisations.emises` à `prelevements.resultats` (§8). L'idempotence est le choix pragmatique, simple, testable, suffisant quand le coût d'un doublon est faible (un doublon ignoré par le MERGE). **Côté cotisation-service, il utilise aussi l'outbox**, avec un relais planifié et non Debezium : la publication y est at-least-once (voir [phase-3-outbox.md](phase-3-outbox.md)), le doublon éventuel étant absorbé en aval par l'idempotence du consommateur.
 
 ## 6. Coût de performance des transactions
 
@@ -166,22 +169,43 @@ Le producer idempotent seul (sans transaction) a un coût quasi nul.
 
 ## 8. Application au projet kafka-mutuelle
 
-Le projet n'utilise pas les transactions Kafka (pas de transaction-id-prefix). Voici pourquoi et ce qu'on pourrait ajouter :
+État au 20/11/2026. Le « scénario possible » que ce guide proposait est réalisé, avec les écarts décrits plus bas.
 
-**Situation actuelle** :
-- prelevement-service lit de `cotisations.emises` et écrit dans Oracle → at-least-once + idempotence applicative (MERGE sur `id_evenement`)
-- Le producer de cotisation-service est déjà idempotent (couche 1) : `enable.idempotence = true`, `acks = -1`, « Instantiated an idempotent producer » (log relevé dans [phase-1-producteur.md](phase-1-producteur.md)). Le producer du DLT l'est aussi (`ProducerConfig values` dans [phase-3-message-invalide.md](phase-3-message-invalide.md))
-- Le DLT (`cotisations.emises-dlt`) est géré par le `DeadLetterPublishingRecoverer` hors transaction
+### Ce qui est en place (constaté : code et tests du dépôt)
+| Élément | Réalisation |
+|---|---|
+| Résultat publié | `prelevement-service` publie chaque décision (ACCEPTE ou REJETE) sur `prelevements.resultats` : clé `idAdherent`, Avro `ResultatPrelevement`, 3 partitions (commits `9a6a0ca`, `8010336`, `c701c19`). Un message rejoué republie la même décision |
+| Transactions | `spring.kafka.producer.transaction-id-prefix: ${KAFKA_TRANSACTION_ID_PREFIX:tx-prelevement-}` : Boot configure le `KafkaTransactionManager`. Une transaction par message (listener en mode record) : lecture, résultat et offset (commit `3f78c42`). Le préfixe doit être **unique par instance** : deux instances de même préfixe se fencent |
+| Isolation | `isolation-level: read-committed` sur le consommateur de `prelevement-service`, et sur celui d'`impaye-service` (qui lit `prelevements.resultats`) |
+| Erreurs | `DefaultAfterRollbackProcessor` à la place du `DefaultErrorHandler` : même BackOff exponentiel (1, 2, 4, 8 s, 5 livraisons), même `DeadLetterPublishingRecoverer` vers `cotisations.emises-dlt`, `commitRecovered=true` avec le `kafkaTemplate` |
+| Oracle | Hors de la transaction Kafka, comme prévu au §4 : le `MERGE` est idempotent, et la ligne survit à l'annulation d'une transaction (prouvé, ci-dessous) |
+| Démo `@RetryableTopic` | Ses containers ne sont pas transactionnels mais utilisent le `kafkaTemplate` de Boot, devenu transactionnel : sans `spring.kafka.template.allow-non-transactional: true` (D8), 3 tests sur 4 de `RetryDemoIntegrationTest` échouent (`No transaction is in process`, relevé en boucle). Cette option ne concerne que le template de Boot : le template des résultats reste strictement transactionnel |
+| `impaye-service` | Consomme en `read_committed`, **sans transaction Kafka** : il ne publie qu'une relance, hors transaction, après l'écriture en base. Les deux ne sont pas atomiques : une relance dont la publication échoue est perdue (le rejeu trouve l'impayé déjà enregistré) |
 
-**Scénario possible pour explorer les transactions** :
-- Faire publier par le prelevement-service chaque décision (ACCEPTE/REJETE) dans `prelevements.resultats`, le topic prévu au brief (clé `idAdherent`, 3 partitions, champ `type`), pas encore réalisé
-- Activer `transaction-id-prefix` pour que la lecture de `cotisations.emises` et l'écriture dans `prelevements.resultats` soient dans la même transaction
-- Configurer `isolation.level=read_committed` sur un consumer de `prelevements.resultats` (l'impaye-service prévu au brief)
-- Observer le comportement en cas de crash simulé (kill du service entre le traitement et le commit)
+### Pourquoi le listener est en mode record (constaté : `TransactionsKafkaLabTest`, `281494c`)
+Le point d'attention du guide d'origine (la doc renvoie à l'*After-rollback Processor*) s'est confirmé, et plus durement que prévu. Sur le broker embarqué, avec un `DefaultAfterRollbackProcessor` : un listener **batch** qui échoue voit **le lot entier redélivré indéfiniment**, sans que le recoverer soit jamais appelé et sans offset validé, y compris avec `BatchListenerFailedException(index)` et avec `commitRecovered=false` ; un listener **record** isole le message fautif (il est redélivré, puis récupéré). Le bytecode de `DefaultAfterRollbackProcessor` ne référence pas `BatchListenerFailedException`. D'où le passage du listener de `prelevement-service` du mode batch au mode record (commit `8010336`), au prix de l'écriture par lot (le `JdbcTemplate.batchUpdate` reste, avec une décision par appel).
 
-Cela permettrait de configurer et observer : le `transactional.id`, l'`isolation.level`, le fencing de zombie, et le comportement en cas de crash.
+### Preuves d'intégration (constaté : `ExactlyOnceIntegrationTest`, `9df0a31`, vrai code, broker embarqué)
+1. **Commit** : le résultat ACCEPTE est visible en `read_committed`, l'offset de la source est dépassé, un seul envoi, aucune livraison échouée, une ligne Oracle.
+2. **Abort** : un échec **après** l'envoi (le broker a bien écrit le message) et avant le commit annule la transaction : résultat invisible en `read_committed`, offset non validé, ligne Oracle conservée.
+3. **Isolation** : sur le même scénario, un lecteur `read_uncommitted` voit le résultat annulé et un lecteur `read_committed` ne le voit pas, alors que le message est avant le LSO.
+4. **Redélivrance** : un échec transitoire est redélivré (seek) : un seul résultat visible, une seule ligne ; le journal contient pourtant deux messages (l'annulé et le validé), cachés par l'isolation.
+5. **DLT** : 5 livraisons sous transaction, 5 résultats écrits puis annulés (aucun visible), puis le message part au DLT avec son topic, sa partition et son offset d'origine, et l'offset de la source est validé : pas de sixième livraison.
 
-**Point d'attention (doc Spring Kafka, non éprouvé dans le projet)** : avec un container transactionnel, la doc renvoie la gestion des enregistrements qui échouent de façon répétée à l'*After-rollback Processor* (« See After-rollback Processor for more information and for handling records that repeatedly fail »), et indique que « When using transactions, similar functionality is provided by the DefaultAfterRollbackProcessor » à la place du `DefaultErrorHandler`. Le `DefaultErrorHandler` actuel (BackOff exponentiel, `BatchListenerFailedException`, DLT) devrait donc être repensé avant d'activer les transactions.
+**Méthode d'une absence** : en `read_committed`, un message qui suit une transaction ouverte est retenu jusqu'à sa fin ; constater qu'il est absent avant ne prouve rien. Les tests attendent que le LSO (`endOffsets` d'un consommateur `read_committed`) dépasse l'offset du message : sa transaction est alors terminée, et son absence est une preuve. **Constaté** dans les sources de kafka-clients 4.2.1 (le projet est en 4.2.2) : pour un consommateur `read_committed`, la fin est le LSO, « le minimum du high watermark et du plus petit offset de toute transaction ouverte ».
+
+**`impaye-service`** : `ImpayeIntegrationTest` publie dans des transactions : un REJETE d'une transaction **annulée** n'est pas persisté. **Témoin négatif constaté** : avec le consommateur forcé en `read_uncommitted`, ce test, et lui seul, échoue (ligne persistée), donc la propriété `read-committed` est bien ce qui protège.
+
+**Header de tentatives** : `kafka_deliveryAttempt` n'est pas posé sur le message du DLT (**constaté** : `ContainerProperties.deliveryAttemptHeader` vaut `false` par défaut, aucune propriété Boot ne l'expose, rien dans le service ne l'active). Le nombre de tentatives se prouve par le `RetryListener` (5) et par les 5 envois, pas par un en-tête.
+
+### Supervision (constaté : capture réelle de `/actuator/prometheus` sous transactions)
+Le producer expose `kafka_producer_txn_{init,begin,send_offsets,commit,abort,prepare}_time_ns_total` : des **cumuls de temps en nanosecondes** (« Total time producer has spent in commitTransaction in nanoseconds »), jamais un nombre de commits ou d'aborts ; les noms `kafka_producer_txn_commit_total` et `_abort_total` n'existent pas. Le dashboard Grafana (ligne « Transactions ») compte donc les traitements validés et annulés à partir du timer du listener, `result=success` ou `failure` : un échec du listener annule la transaction (**déduit** de la sémantique de Spring Kafka, prouvé par les tests ci-dessus ; ce n'est pas lu sur un compteur de transactions).
+
+### Ce qui n'est pas prouvé
+- **Les transactions contre le vrai broker 4.4.0 du compose** : les tests utilisent le broker embarqué 4.2.2.
+- **Un crash en plein traitement** (arrêt brutal du processus entre l'envoi et le commit) : l'échec est simulé par une exception, pas par un `kill`.
+- **L'atomicité de l'envoi au DLT et de la validation de l'offset** : on constate que le message arrive au DLT et que l'offset est validé (et, en test unitaire, que `sendOffsetsToTransaction` est appelé) ; qu'ils forment **une seule** transaction n'est pas observé sur un échec en plein milieu (**déduit** de la doc de `commitRecovered`).
+- **Le démarrage à froid** : le premier message d'un contexte transactionnel a mis 16 à 24 s à être traité sur une machine chargée (initialisation du producer transactionnel de 2 à 7 s, puis une première invocation du listener de 8 s, dont 0,05 s d'envoi : **constaté** ; que le reste soit le premier `MERGE` Oracle est **déduit**, non isolé). Tout délai d'attente de test inférieur à 30 s y est fragile.
 
 ## Sources
 
@@ -191,6 +215,8 @@ Cela permettrait de configurer et observer : le `transactional.id`, l'`isolation
 - Spring Kafka Reference — Exactly Once Semantics : docs.spring.io/spring-kafka/reference/kafka/exactly-once.html — lu le 20/11/2026 (même remarque)
 - Apache Kafka 4.4 — Producer Configs et Consumer Configs : kafka.apache.org/44/configuration/producer-configs/ et consumer-configs/ — lus le 20/11/2026
 - Conduktor — Exactly-Once Semantics in Kafka : conduktor.io/glossary/exactly-once-semantics-in-kafka — non relu
+- Sources de kafka-clients 4.2.1 (`kafka-clients-4.2.1-sources.jar`, dépôt Maven local ; le projet résout la 4.2.2) : javadoc de `KafkaConsumer.endOffsets` et de `isolation.level`, noms des métriques transactionnelles de `KafkaProducerMetrics` — lus le 20/11/2026
+- Dépôt : `TransactionsKafkaLabTest` (`281494c`), `ExactlyOnceIntegrationTest` (`9df0a31`), `ImpayeIntegrationTest` (`f23c741`, `81ff191`) ; capture de `/actuator/prometheus` du 20/11/2026
 
 ---
 
@@ -202,13 +228,20 @@ Cela permettrait de configurer et observer : le `transactional.id`, l'`isolation
 - Spring Kafka : le container envoie les offsets par `producer.sendOffsetsToTransaction()` avant le commit ; si le listener lève une exception, « the transaction is rolled back and the consumer is repositioned » (exactly-once)
 - Spring Kafka : synchronisation DB + Kafka, « the database transaction will commit followed by the Kafka transaction » ; l'exception d'un commit Kafka qui échoue après celui de la DB est propagée à l'appelant depuis les versions 2.5.17, 2.6.12, 2.7.9 et 2.8.0 (transactions)
 - Kafka 4.4 : `enable.idempotence` vaut `true` par défaut et exige `max.in.flight.requests.per.connection` ≤ 5 (défaut 5) ; `retries` vaut 2147483647 par défaut ; sans `transactional.id` (défaut `null`), le producer est limité à la livraison idempotente ; `isolation.level` vaut `read_uncommitted` par défaut, et les messages non transactionnels sont renvoyés dans les deux modes
-- Dépôt : aucune configuration transactionnelle (`transaction-id-prefix`, `KafkaTransactionManager`, `isolation.level`, `read_committed` absents) ; clé d'idempotence `id_evenement` (aucun `dateEcheance` n'existe) ; producers de cotisation-service et du DLT idempotents (journaux des phases 1 et 3)
+- Dépôt (20/11/2026) : transactions **activées** sur `prelevement-service` (`transaction-id-prefix`, `isolation-level: read-committed`, `DefaultAfterRollbackProcessor` avec recoverer et `commitRecovered`) ; clé d'idempotence `id_evenement` (aucun `dateEcheance` n'existe) ; producers de cotisation-service et du DLT idempotents (journaux des phases 1 et 3)
+- Laboratoire (`TransactionsKafkaLabTest`, broker embarqué avec `transaction.state.log.replication.factor=1` et `min.isr=1`) : commit, abort, fencing d'un producer zombie (`ProducerFencedException`), `read_committed` qui masque l'annulé ; listener batch sous transaction : lot redélivré indéfiniment, recoverer jamais appelé ; listener record : message fautif isolé
+- `ExactlyOnceIntegrationTest` : les cinq preuves du §8 ; `ImpayeIntegrationTest` : `read_committed` et son témoin négatif
+- kafka-clients 4.2.1 (sources) : `endOffsets` rend le LSO en `read_committed` ; `read_uncommitted` renvoie aussi les messages annulés ; le producer n'expose que des cumuls de temps de transaction (`txn-*-time-ns-total`)
+- Boot : `spring.kafka.template.allow-non-transactional` existe (défaut `false`) ; sans elle, la démo `@RetryableTopic` échoue sous transaction
 
 **Déduit** (cohérent avec les sources mais non vérifié textuellement) :
 - Le coût du producer idempotent seul est quasi nul (aucune source lue ne donne ce chiffre)
+- « Échec du listener = transaction annulée » lu sur le timer du listener pour le dashboard (sémantique Spring Kafka, prouvée par les tests mais non lue sur un compteur de transactions)
+- Démarrage à froid : le reste de la première invocation du listener (environ 8 s moins 0,05 s d'envoi) serait le premier `MERGE` Oracle
 
 **Non vérifié** (non relu dans cette session) :
-- Fonctionnement interne : PID et numéro de séquence, transaction coordinator, `__transaction_state`, two-phase commit, marqueurs COMMIT/ABORT, fencing par `transactional.id` (KIP-98 et Conduktor non lus)
+- Fonctionnement interne : PID et numéro de séquence, transaction coordinator, `__transaction_state`, two-phase commit, marqueurs COMMIT/ABORT (KIP-98 et Conduktor non lus). Le fencing par `transactional.id` est, lui, constaté au laboratoire
+- Les transactions contre le broker réel 4.4.0 du compose (les tests utilisent le broker embarqué 4.2.2) ; un crash en plein traitement ; l'atomicité de l'envoi au DLT et de la validation de l'offset sur un échec en plein milieu
 - `enable.auto.commit=false` « obligatoire » avec les transactions ; `acks=all` comme défaut et « depuis Kafka 3.0 » pour l'idempotence (les pages de configuration lues donnent les valeurs par défaut, pas la version d'introduction)
 - « Ce n'est PAS une transaction distribuée (XA/2PC) » et « coordonnées par le TransactionSynchronizationManager » (la page Spring Kafka lue ne mentionne ni XA ni 2PC)
 - Latence +2 à 5 ms et débit -10 à 20 % (Conduktor, sans benchmark cité)

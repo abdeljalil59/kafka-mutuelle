@@ -1,5 +1,7 @@
 # Phase 5, étape 2 : `MERGE` Oracle idempotent et écriture par lot
 
+> **Mise à jour (20/11/2026)** : l'écriture par `MERGE` décrite ici est toujours en place, mais **le listener batch ne l'est plus** : le commit `8010336` l'a remplacé par un listener en mode record (une décision par appel ; `JdbcTemplate.batchUpdate` reste, avec des lots d'un élément). Les §4 (listener batch, `BatchListenerFailedException`, repli un par un, `value() == null`), §6 (en-tête DLT en mode batch, logs `seekOrRecover`) et §7 (tests du listener batch, « 10 livraisons ») décrivent du code supprimé. Raison : sous transactions Kafka, un listener batch redélivre le lot entier sans jamais appeler le recoverer (laboratoire `281494c`, [transactions-exactement-une-fois.md](transactions-exactement-une-fois.md), §8). L'expérience Oracle (§5) et le comportement du `MERGE` restent valables. Le `DefaultErrorHandler` est devenu un `DefaultAfterRollbackProcessor` (commit `3f78c42`).
+
 Environnement (19/11/2026, heure locale +01:00) : Spring Boot 4.1.2, Spring Framework 7.0.10 (`spring-jdbc` 7.0.10), `spring-kafka` 4.1.2, `ojdbc17` 23.26.3.0.0, image `gvenzl/oracle-free:23.26.4-slim-faststart`. Versions : voir [versions.md](versions.md). Étape précédente (Oracle, Testcontainers) : [phase-5-etape-1-oracle.md](phase-5-etape-1-oracle.md).
 
 Pour chaque point : ce qui est **constaté** (test, sortie réelle, source ou doc lue), **déduit** et **non vérifié**. Les informations sur l'Oracle local viennent de l'utilisateur : je ne m'y suis jamais connecté.

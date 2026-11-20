@@ -5,6 +5,8 @@ Environnement (17/11/2026, heure locale +01:00) : Spring Boot 4.1.2, spring-kafk
 Pour chaque point : ce qui est **constaté** (sortie réelle ou source lue), **déduit** et **non vérifié**. Les heures des logs Spring sont en heure de Paris (+01:00) ; celles de la console Kafka dans le conteneur sont en UTC.
 
 > **Mise à jour du 19/11/2026 (phase 4, Avro)** : depuis le commit `6d0c28e`, `cotisations.emises` est en Avro. Le désérialiseur JSON, le sérialiseur Jackson du topic de rejets et les invariants du record vérifiés à la désérialisation, décrits ci-dessous, ne sont plus en place : le désérialiseur est `KafkaAvroDeserializer` (toujours derrière l'`ErrorHandlingDeserializer`), le DLT republie un objet Avro pour une exception du listener, et un montant négatif atteint maintenant le domaine (`PrelevementInvalideException`). Le reste (message illisible, octets d'origine, en-têtes) est inchangé. Voir [phase-4-avro-schema-registry.md](phase-4-avro-schema-registry.md), section 5.
+>
+> **Mise à jour du 20/11/2026** : le `DefaultErrorHandler` décrit au §3 (« BackOff laissé au défaut », `FixedBackOff(0, 9)`) et au §7 (« 10 livraisons ») a été remplacé en deux temps : par un BackOff exponentiel de 5 livraisons (commit `0042f62`, [amelioration-dlt.md](amelioration-dlt.md)), puis par un `DefaultAfterRollbackProcessor` quand `prelevement-service` est devenu transactionnel (commit `3f78c42`), avec le même recoverer, le même topic de rejets et `commitRecovered`. Le listener est aussi passé du mode batch au mode record.
 
 ## 1. Objectif de la phase
 - Montrer qu'un message illisible bloque une partition quand le consommateur n'est pas protégé, puis le sortir de la route sans bloquer les messages suivants.

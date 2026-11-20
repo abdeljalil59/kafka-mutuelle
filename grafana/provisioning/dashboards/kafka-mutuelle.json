@@ -253,7 +253,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "Doublons ignorés par minute",
-      "description": "Messages rejoués dont le MERGE n'a rien inséré (la décision existait déjà). Compteur prelevement_doublons_ignores_total. Après un lot en échec rejoué ligne par ligne, ce compteur peut être surestimé (limite connue de l'étape 2).",
+      "description": "Messages rejoués dont le MERGE n'a rien inséré (la décision existait déjà) : rejeu d'un message déjà traité, ou redélivrance après un échec survenu après le MERGE (par exemple l'envoi du résultat, qui annule la transaction Kafka). Compteur prelevement_doublons_ignores_total, alimenté par un MERGE par message depuis le listener en mode record : la surestimation due à un lot en échec rejoué ligne par ligne a disparu avec le mode batch.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"

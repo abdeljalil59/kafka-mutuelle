@@ -1,7 +1,7 @@
 # Projet kafka-mutuelle : brief de cadrage
 
 > À donner à Claude CLI comme contexte de départ (ou à renommer `CLAUDE.md` à la racine du dépôt).
-> Statut : **conception validée, aucun code applicatif écrit**. Phase 0 terminée (expériences CLI et infrastructure compose). Phase 1 à démarrer.
+> Statut au 20/11/2026 : les trois services (`cotisation-service`, `prelevement-service`, `impaye-service`) sont réalisés, avec Avro et Schema Registry, Oracle, transactions Kafka (exactly-once) sur `prelevement-service`, DLT, métriques Prometheus et Grafana. Reste `kafka-lab` (dashboard live), l'outbox Oracle et Kafka Streams. État détaillé : `README.md` et `docs/`.
 
 ## 1. Objectif
 
@@ -149,9 +149,16 @@ Noter pour chaque expérience : commande, résultat observé, enseignement (fich
 - Kafka 4.4.0 retenu (image `apache/kafka:4.4.0`, tag figé).
 - `infra/docker-compose.yml` : Kafka KRaft (un nœud) avec volume nommé `kafka-mutuelle-data`, et Kafka UI (`ghcr.io/kafbat/kafka-ui:v1.5.0`, http://localhost:8080). Persistance prouvée par recréation des conteneurs sans `-v`.
 
+**Fait depuis (état au 20/11/2026, détail dans `README.md` et `docs/`)**
+- Versions compatibles de Spring Boot 4.1.2, spring-kafka 4.1.2 et kafka-clients 4.2.2 avec Kafka 4.4.0 relevées dans `docs/versions.md`.
+- Parent Maven et quatre modules : `events-contract` (schémas Avro `CotisationEmise` et `ResultatPrelevement`), `cotisation-service` (REST, outbox H2), `prelevement-service` (Oracle, `MERGE` idempotent, listener record, transactions Kafka, DLT à BackOff exponentiel, résultats sur `prelevements.resultats`) et `impaye-service` (H2, `read_committed`, relance après N rejets sur `impayes.relances`).
+- Prometheus et Grafana (dashboard provisionné), sans exporter de lag côté broker.
+- Preuves exactly-once sur le vrai code : `ExactlyOnceIntegrationTest` (`docs/transactions-exactement-une-fois.md`).
+
 **Reste à faire**
-1. **Vérifier dans la documentation officielle** les versions compatibles de Spring Boot et spring-kafka avec Kafka 4.4.0.
-2. Démarrer la phase 1 : parent Maven et `events-contract`, puis `cotisation-service` avec ses tests unitaires.
+1. `kafka-lab` : dashboard live (phase 5) et endpoints de scénarios (rafale, message empoisonné, doublon, arrêt d'un consommateur).
+2. Outbox Oracle et Kafka Streams (phase 6) ; ELK éventuel (phase 7).
+3. Limites connues à traiter : relance d'`impaye-service` non atomique avec l'enregistrement et pas de DLT, transactions non prouvées contre le broker réel 4.4.0, aucun panneau Grafana dédié à `impaye-service`.
 
 **À retenir**
 - `docker compose down -v` supprime le volume `kafka-mutuelle-data` et toutes les données. Utiliser `docker compose down` seul.
@@ -159,4 +166,4 @@ Noter pour chaque expérience : commande, résultat observé, enseignement (fich
 
 ## 10. Points ouverts
 
-- Choix de l'exporter de lag Kafka pour Prometheus (kafka-exporter ou JMX exporter) : à trancher dans la doc en phase 4.
+- Exporter de lag Kafka pour Prometheus : **tranché pour l'instant, pas d'exporter côté broker** (le lag est lu sur les métriques clientes Kafka et disparaît quand le consommateur est arrêté ; `kafka-exporter` et KMinion non vérifiés avec Kafka 4.4 : `docs/phase-6-metriques.md`, §9 et §12). À rouvrir si le lag à l'arrêt devient nécessaire.

@@ -8,30 +8,35 @@ pour chaque expérience.
 ## Flux
 
 ```
-cotisation-service ──► cotisations.emises ──► prelevement-service ──► prelevements.resultats ──► impaye-service
+cotisation-service ──► cotisations.emises ──► prelevement-service ──► prelevements.resultats ──► impaye-service ──► impayes.relances
                                                                                         └──► kafka-lab (dashboard live)
 ```
 
-Réalisé : `cotisation-service` ──► `cotisations.emises` ──► `prelevement-service` (décisions enregistrées dans Oracle, de façon idempotente et par lot).
-Pas encore réalisé : `prelevements.resultats`, `impaye-service`, `kafka-lab`.
+Réalisé : les trois services. Pas encore réalisé : `kafka-lab` (dashboard live).
+
+| Service | Rôle | Kafka | Base |
+|---|---|---|---|
+| `cotisation-service` | API REST qui émet des cotisations (outbox) | producteur de `cotisations.emises` (Avro) | H2 (table `outbox`) |
+| `prelevement-service` | décide ACCEPTE ou REJETE (plafond), enregistre la décision, publie le résultat | consomme `cotisations.emises`, publie `prelevements.resultats` (Avro) **dans une transaction Kafka**, DLT | Oracle Free 23ai |
+| `impaye-service` | enregistre les prélèvements rejetés, relance un adhérent au N-ième rejet | consomme `prelevements.resultats` en `read_committed` (**sans transaction Kafka**), publie `impayes.relances` (JSON) | H2 en mémoire |
 
 | Topic | Clé | Partitions | Valeur |
 |---|---|---|---|
 | `cotisations.emises` | `idAdherent` | 3 | **Avro** (sujet `cotisations.emises-value` du Schema Registry) |
-| `prelevements.resultats` (champ `type` : ACCEPTE / REJETE) | `idAdherent` | 3 | à définir (non réalisé) |
-| `impayes.relances` | `idAdherent` | 3 | à définir (non réalisé) |
-| `cotisations.emises-dlt` (messages de `cotisations.emises` rejetés : illisibles, ou en échec dans le listener) | `idAdherent` (clé d'origine conservée) | 3 | octets d'origine (illisible) ou Avro (échec du listener) |
+| `prelevements.resultats` | `idAdherent` | 3 | **Avro** `ResultatPrelevement` : un seul topic, champ `type` ACCEPTE / REJETE. Créé et publié par `prelevement-service`, dans une transaction |
+| `impayes.relances` | `idAdherent` | 3 | **JSON** en chaîne (`idAdherent`, `nombreRejets`, `dernierMontant`, `relanceLe`), pas de schéma Avro. Créé et publié par `impaye-service` |
+| `cotisations.emises-dlt` (messages de `cotisations.emises` rejetés : illisibles, ou en échec dans le listener) | `idAdherent` (clé d'origine conservée) | 3 | octets d'origine (illisible) ou Avro (échec du listener) ; rétention 30 jours à la création du topic |
 | `cotisations.retry-demo`, `…-retry`, `…-dlt` (démo `@RetryableTopic`, inactive par défaut) | libre | 3 | JSON brut |
 
 ## Stack
 
-- Java 17, Maven multi-modules : `events-contract` (records et schéma Avro), `cotisation-service`, `prelevement-service`
+- Java 17, Maven multi-modules : `events-contract` (records et schémas Avro `CotisationEmise` et `ResultatPrelevement`), `cotisation-service`, `prelevement-service`, `impaye-service`
 - Spring Boot 4.1.2, Spring for Apache Kafka 4.1.2, kafka-clients 4.2.2
 - Kafka 4.4.0 (`apache/kafka:4.4.0`, KRaft, un nœud) et Kafka UI v1.5.0, par Docker Compose (`infra/docker-compose.yml`)
-- **Avro 1.11.5 et Confluent Schema Registry 7.9.11** (`io.confluent:kafka-avro-serializer` 7.9.11) : contrat typé de `cotisations.emises`
-- **Oracle Free 23ai** pour `prelevement-service` (table des décisions, idempotence) : H2 y est retiré ; `ojdbc17` 23.26.3.0.0 ; tests sur Oracle dans un conteneur (Testcontainers 2.0.5, image `gvenzl/oracle-free:23.26.4-slim-faststart`)
-- **H2 reste** pour `cotisation-service` (table `outbox`)
-- **Actuator + Micrometer, Prometheus v3.16.0 et Grafana 13.3.1** : métriques des deux services (`/actuator/prometheus`), dashboard « Kafka Mutuelle » provisionné (fichiers dans `prometheus/` et `grafana/`)
+- **Avro 1.11.5 et Confluent Schema Registry 7.9.11** (`io.confluent:kafka-avro-serializer` 7.9.11) : contrats typés de `cotisations.emises` et `prelevements.resultats`
+- **Oracle Free 23ai** pour `prelevement-service` (table des décisions, idempotence) ; `ojdbc17` 23.26.3.0.0 ; tests sur Oracle dans un conteneur (Testcontainers 2.0.5, image `gvenzl/oracle-free:23.26.4-slim-faststart`)
+- **H2** pour `cotisation-service` (table `outbox`) et `impaye-service` (table `impaye`, en mémoire : les impayés sont perdus à l'arrêt)
+- **Actuator + Micrometer, Prometheus v3.16.0 et Grafana 13.3.1** : métriques des trois services (`/actuator/prometheus`), dashboard « Kafka Mutuelle » provisionné (5 lignes, 14 panneaux ; fichiers dans `prometheus/` et `grafana/`). Aucun panneau n'est encore dédié à `impaye-service` (sa cible Prometheus existe) ; deux panneaux sans filtre par service, la latence du listener et les connexions HikariCP, en afficheront les séries dès que la cible sera scrapée
 
 | Composant | Port de l'hôte |
 |---|---|
@@ -40,28 +45,48 @@ Pas encore réalisé : `prelevements.resultats`, `impaye-service`, `kafka-lab`.
 | **Schema Registry** | **8082** (8081 dans le conteneur, car 8081 est pris par `cotisation-service`) |
 | `cotisation-service` (API REST et Actuator) | 8081 |
 | `prelevement-service` (Actuator, `/actuator/prometheus`) | 8083 (surchargeable par `PRELEVEMENT_SERVER_PORT`) |
+| **`impaye-service`** (Actuator, `/actuator/prometheus`) | **8084** (surchargeable par `IMPAYE_SERVER_PORT`) |
 | **Prometheus** | **9090** |
 | **Grafana** | **3000** (dashboard « Kafka Mutuelle » ; `admin`/`admin`, lecture anonyme : usage local uniquement) |
 | Oracle Free 23ai local (utilisé par `prelevement-service`) | 1522 (service `freepdb1`, utilisateur `kafka_mutuelle`) |
 
-Démarrer l'infrastructure : `docker compose -f infra/docker-compose.yml up -d` (démarre aussi Prometheus et Grafana). Les deux services scrapés tournent sur l'hôte, pas dans le compose : leurs cibles Prometheus sont `down` tant qu'ils sont arrêtés. Ne jamais utiliser `down -v` : il supprime le volume `kafka-mutuelle-data` et toutes les données.
+Démarrer l'infrastructure : `docker compose -f infra/docker-compose.yml up -d` (démarre aussi Prometheus et Grafana). Les trois services tournent sur l'hôte (`java -jar` ou IDE), pas dans le compose, et il n'existe aucun Dockerfile : leurs cibles Prometheus sont `down` tant qu'ils sont arrêtés. Prometheus ne relit pas `prometheus/prometheus.yml` tout seul : après l'ajout d'une cible, redémarrer son conteneur. Ne jamais utiliser `down -v` : il supprime le volume `kafka-mutuelle-data` et toutes les données.
 
-## Consommation dans `prelevement-service`
+## `prelevement-service` : consommation, transactions et DLT
 
-- **Consumer Kafka en mode batch** : `@KafkaListener(batch = "true")` reçoit une `List<ConsumerRecord>`, tous les messages d'un poll.
-- **Écriture idempotente par `MERGE` Oracle** (`WHEN NOT MATCHED THEN INSERT` seul) : un doublon est ignoré, sans exception ni log (plus de capture de `DuplicateKeyException`). Toutes les décisions du lot sont écrites par un seul `JdbcTemplate.batchUpdate` (`JdbcClient` n'a pas de batch dans `spring-jdbc` 7.0.10).
-- **Repli un par un sur échec du lot** : le cas d'usage rejoue les décisions une à une pour trouver la première en échec, puis le listener lève `BatchListenerFailedException(index)`. Les offsets avant l'index sont validés ; seul le message fautif est réessayé puis envoyé au DLT.
-- **Messages illisibles** (`value() == null`) détectés dans le listener, en mode batch rien ne les route automatiquement.
-- **Métriques** : Actuator + Micrometer exposent `/actuator/prometheus` (port 8083) : séries clientes Kafka (lag par partition, débit), timer du listener, pool HikariCP, et deux compteurs custom, `prelevement_decisions_total{decision}` (décisions réellement insérées) et `prelevement_doublons_ignores_total`. Prometheus (9090) les scrape, Grafana (3000) affiche le dashboard « Kafka Mutuelle ». Le lag vient du client Kafka : il disparaît quand le consommateur est arrêté (pas d'exporter côté broker).
+- **Listener en mode record** : `@KafkaListener` reçoit un `ConsumerRecord` à la fois. Le mode batch (`List<ConsumerRecord>`, `BatchListenerFailedException`, repli un par un) a été abandonné : sous transactions, un listener batch avec `DefaultAfterRollbackProcessor` redélivre le lot entier à l'infini sans jamais appeler le recoverer (relevé au laboratoire), alors qu'un listener record isole le message fautif. Voir [transactions-exactement-une-fois.md](docs/transactions-exactement-une-fois.md), §8.
+- **Écriture idempotente par `MERGE` Oracle** (`WHEN NOT MATCHED THEN INSERT` seul) : un doublon est ignoré, sans exception. `JdbcTemplate.batchUpdate` est conservé (`JdbcClient` n'a pas de batch), avec une décision par appel.
+- **Résultat publié** : après le `MERGE`, la décision (ACCEPTE ou REJETE) est publiée sur `prelevements.resultats` avec `idEvenement` pour identifiant. Un message rejoué republie la même décision.
+- **Transactions Kafka** : `spring.kafka.producer.transaction-id-prefix` (`tx-prelevement-` par défaut, **unique par instance**, variable `KAFKA_TRANSACTION_ID_PREFIX`) et consommateur en `read_committed`. Lecture de `cotisations.emises`, résultat publié et offset sont validés ou annulés ensemble. **Oracle ne participe pas à la transaction Kafka** : c'est l'idempotence du `MERGE` qui absorbe un rejeu.
+- **Erreurs** : `DefaultAfterRollbackProcessor` à la place du `DefaultErrorHandler` (qui ne gère pas un container transactionnel) : 5 livraisons (1 + 4 réessais à 1, 2, 4 puis 8 s), puis `cotisations.emises-dlt` sur la même partition, avec validation de l'offset (`commitRecovered`). Une `PrelevementInvalideException` et un message illisible ne sont pas réessayés (1 livraison).
+- **Preuves exactly-once** (`ExactlyOnceIntegrationTest`, 5 tests sur le vrai code, broker embarqué) : commit (résultat et offset visibles ensemble), abort après envoi (résultat invisible en `read_committed`, offset non validé, ligne Oracle conservée), isolation (`read_uncommitted` voit le résultat annulé, `read_committed` non), redélivrance (un seul résultat visible, une seule ligne), DLT après 5 livraisons sans résultat visible. L'absence se prouve par le LSO (la transaction est terminée), pas par un délai. Non prouvé : les transactions contre le broker réel 4.4.0 (les tests utilisent le broker embarqué 4.2.2), un crash en plein traitement, et l'atomicité entre l'envoi au DLT et la validation de l'offset.
+- **Métriques** : `/actuator/prometheus` (port 8083) : séries clientes Kafka (lag par partition, débit), timer du listener, pool HikariCP, timers du `KafkaTemplate` (`kafkaTemplate` pour le DLT, `resultatsKafkaTemplate` pour les résultats), deux compteurs custom `prelevement_decisions_total{decision}` et `prelevement_doublons_ignores_total`, et `kafka_producer_txn_*_time_ns_total`, qui sont des **cumuls de temps** et non des compteurs de transactions. Le lag vient du client Kafka : il disparaît quand le consommateur est arrêté (pas d'exporter côté broker).
 
-Détails et mesures : [phase-5-etape-2-merge-batch.md](docs/phase-5-etape-2-merge-batch.md) (batch et `MERGE`), [phase-6-metriques.md](docs/phase-6-metriques.md) (métriques).
+Détails et mesures : [transactions-exactement-une-fois.md](docs/transactions-exactement-une-fois.md), [amelioration-dlt.md](docs/amelioration-dlt.md), [phase-6-metriques.md](docs/phase-6-metriques.md).
+
+## `impaye-service`
+
+- **Consommation** : `prelevements.resultats` en `read_committed` (le producteur amont est transactionnel : un résultat d'une transaction annulée n'est jamais livré), groupe `impaye-service`, mode record. Les résultats ACCEPTE sont ignorés ; un REJETE devient un impayé. **Pas de transaction Kafka** côté service.
+- **Persistance** : H2 en mémoire, table `impaye` (clé d'idempotence : `id_evenement`, contrainte d'unicité). Un résultat rejoué est ignoré sans exception et gonfle le compteur `impaye_doublons_ignores_total`.
+- **Relance** : quand le nombre d'impayés d'un adhérent atteint **exactement** `app.relance.seuil` (3 par défaut), une relance JSON est publiée sur `impayes.relances` (clé `idAdherent`), une seule fois par adhérent. Un doublon ne relance jamais. Le nombre de rejets est lu en base (`COUNT` par adhérent), pas tenu dans un compteur.
+- **Erreurs** : 3 réessais espacés de 1 s, puis le message est journalisé en ERROR et abandonné : **pas de DLT** dans cette première version.
+- **Limite connue** : l'enregistrement et la publication de la relance ne sont pas atomiques. Si la publication échoue, le message est réessayé mais retrouve l'impayé déjà enregistré (doublon) : la relance est perdue. Un état « relance émise » en base ou un outbox corrigerait cela.
+- **Topic d'entrée non créé par ce service** (`allow.auto.create.topics=false`) : il appartient à `prelevement-service`. Démarré avant lui, `impaye-service` attend le topic au lieu de le faire créer à une seule partition.
+- **Tests** : sans Oracle ni Docker (broker embarqué, registre factice `mock://`, H2). Le `read_committed` est prouvé avec un producteur transactionnel de test, et un témoin négatif (consommateur forcé en `read_uncommitted`) fait échouer le test d'abort.
 
 ## Prérequis
 
-- Docker Desktop (démarré avant toute commande `docker`), y compris pour `mvn verify` : les tests de `prelevement-service` démarrent Oracle dans un conteneur (premier téléchargement : environ 1,3 Go, 5,1 Go sur disque ; démarrage de plusieurs minutes sur une machine chargée)
+- Docker Desktop (démarré avant toute commande `docker`), y compris pour `mvn verify` complet : les tests de `prelevement-service` démarrent Oracle dans un conteneur (premier téléchargement : environ 1,3 Go, 5,1 Go sur disque ; démarrage de 4 à plus de 10 minutes selon la mémoire de la machine, au-delà de laquelle le build échoue)
 - Java 17
 - Maven
-- **Oracle Free 23ai** installé en local, pour **exécuter** `prelevement-service` (par défaut `localhost:1522/freepdb1`, utilisateur `kafka_mutuelle`). URL, utilisateur et mot de passe se surchargent par les variables d'environnement `PRELEVEMENT_DB_URL`, `PRELEVEMENT_DB_USER` et `PRELEVEMENT_DB_PASSWORD`. Le service ne démarre pas sans base ; `cotisation-service`, lui, reste autonome (H2).
+- **Oracle Free 23ai** installé en local, pour **exécuter** `prelevement-service` (par défaut `localhost:1522/freepdb1`, utilisateur `kafka_mutuelle`). URL, utilisateur et mot de passe se surchargent par les variables d'environnement `PRELEVEMENT_DB_URL`, `PRELEVEMENT_DB_USER` et `PRELEVEMENT_DB_PASSWORD`. Le service ne démarre pas sans base ; `cotisation-service` et `impaye-service` restent autonomes (H2).
+
+## Tests
+
+**212 tests** : `events-contract` 21, `cotisation-service` 55, `prelevement-service` 109, `impaye-service` 27. Provenance : les trois premiers modules et le nouveau `impaye-service` ont été relevés au `mvn -B verify -pl events-contract,cotisation-service,impaye-service` du 20/11/2026 (103 tests, une minute, sans Oracle) ; les 109 de `prelevement-service` viennent du dernier build complet (leur code n'a pas changé depuis).
+
+- Build complet : `mvn -B verify` (Docker et mémoire suffisante pour Oracle).
+- Sans Oracle : `mvn -B verify -pl events-contract,cotisation-service,impaye-service`.
 
 ## Avancement
 
@@ -70,15 +95,15 @@ Détails et mesures : [phase-5-etape-2-merge-batch.md](docs/phase-5-etape-2-merg
 | 0 | Kafka en CLI (Docker) + Kafka UI | Terminée |
 | 1 | Producer et consumer Spring, tests unitaires | En cours |
 | 2 | Clés, rebalancing, plusieurs instances | En cours |
-| 3 | Idempotence, retries, DLT | En cours |
+| 3 | Idempotence, retries, DLT | Réalisée (idempotence, `@RetryableTopic`, DLT avec BackOff exponentiel : journaux de la phase 3 et [amelioration-dlt.md](docs/amelioration-dlt.md)) |
 | 4 | Prometheus puis Grafana | Réalisée sans exporter de lag broker (Actuator, Micrometer, Prometheus et Grafana ; lag par les métriques clientes Kafka) : [phase-6-metriques.md](docs/phase-6-metriques.md), « phase 6 » de travail |
 | 5 | Dashboard live `kafka-lab` + scénarios | À faire |
-| 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | En cours (Avro et Schema Registry réalisés ; `prelevement-service` migré sur Oracle, écriture idempotente par `MERGE` et par lot ; outbox vu sur H2 en phase 3, pas encore sur Oracle ; exactly-once et Kafka Streams à faire) |
-| 7 | Tests d'intégration complets, éventuellement ELK | À faire |
+| 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | En cours : Avro et Schema Registry, Oracle (`MERGE`), exactly-once (transactions et preuves sur `prelevement-service`) et `impaye-service` (rejets, relance) réalisés ; outbox vu sur H2 en phase 3, pas encore sur Oracle ; Kafka Streams à faire |
+| 7 | Tests d'intégration complets, éventuellement ELK | En cours (`@EmbeddedKafka`, registre factice et Oracle Testcontainers sur les trois services) ; ELK à faire |
 
 ## Études réalisées
 
-Sept études, chacune avec son journal (constaté, déduit, non vérifié) et ses tests. Leur numéro de « phase » est un nom de travail : au tableau ci-dessus, les trois premières relèvent de la phase 3 (l'outbox y est vu sur H2, avant l'outbox Oracle de la phase 6), les trois suivantes de la phase 6 (la « phase 5 » de travail n'est pas la phase 5 du tableau, `kafka-lab`), et la dernière, la « phase 6 » de travail (métriques), est la phase 4 du tableau (Prometheus et Grafana).
+Neuf études, chacune avec son journal ou son guide (constaté, déduit, non vérifié) et ses tests. Leur numéro de « phase » est un nom de travail : au tableau ci-dessus, les trois premières relèvent de la phase 3 (l'outbox y est vu sur H2, avant l'outbox Oracle de la phase 6), les suivantes de la phase 6 (la « phase 5 » de travail n'est pas la phase 5 du tableau, `kafka-lab`), et la « phase 6 » de travail (métriques) est la phase 4 du tableau (Prometheus et Grafana). Les journaux sont des relevés **datés** : un encadré « Mise à jour » en tête signale ce qui a changé depuis.
 
 | Étude | Contenu | Journal |
 |---|---|---|
@@ -87,7 +112,9 @@ Sept études, chacune avec son journal (constaté, déduit, non vérifié) et se
 | Retry topic | Retries non bloquants avec `@RetryableTopic`, cohabitation avec le DLT, perte de l'ordre par clé | [phase-3-retry-topic.md](docs/phase-3-retry-topic.md) |
 | Avro et Schema Registry | Schéma `CotisationEmise` enregistré dans le registre (port 8082), sérialisation Avro de bout en bout | [phase-4-avro-schema-registry.md](docs/phase-4-avro-schema-registry.md) |
 | Oracle (`prelevement-service`) | H2 remplacé par Oracle Free 23ai ; tests sur Oracle dans un conteneur (Testcontainers) ; découvertes sur `Instant` et ORA-12899 | [phase-5-etape-1-oracle.md](docs/phase-5-etape-1-oracle.md) |
-| `MERGE` et écriture par lot (`prelevement-service`) | Idempotence par `MERGE … WHEN NOT MATCHED` sans exception ; listener Kafka en mode batch, `JdbcTemplate.batchUpdate`, repli un par un et `BatchListenerFailedException(index)` | [phase-5-etape-2-merge-batch.md](docs/phase-5-etape-2-merge-batch.md) |
+| `MERGE` et écriture par lot (`prelevement-service`) | Idempotence par `MERGE … WHEN NOT MATCHED` sans exception ; listener batch avec `BatchListenerFailedException`, **remplacé depuis par un listener record** | [phase-5-etape-2-merge-batch.md](docs/phase-5-etape-2-merge-batch.md) |
 | Métriques (Actuator, Micrometer, Prometheus, Grafana) | Séries clientes Kafka, timer du listener et pool HikariCP ; deux compteurs custom (décisions, doublons) ; Prometheus et dashboard Grafana provisionnés ; relevé du smoke test | [phase-6-metriques.md](docs/phase-6-metriques.md) |
+| Amélioration du DLT | BackOff exponentiel (5 livraisons, 15 s), rétention 30 jours, tests de livraisons, panneaux Grafana du DLT | [amelioration-dlt.md](docs/amelioration-dlt.md) |
+| Transactions et exactly-once | Guide pédagogique et application au projet : transactions sur `prelevement-service`, `read_committed`, preuves, limites ; `impaye-service` | [transactions-exactement-une-fois.md](docs/transactions-exactement-une-fois.md) |
 
-Journal d'apprentissage : [`docs/`](docs/) : [phase 0, Kafka en CLI](docs/phase-0-cli.md), [phase 1, producteur](docs/phase-1-producteur.md), [phase 1, consommateur](docs/phase-1-consommateur.md), [phase 2, rebalancing](docs/phase-2-rebalancing.md), [phase 3, message invalide](docs/phase-3-message-invalide.md), [phase 3, idempotence](docs/phase-3-idempotence.md), [phase 3, outbox](docs/phase-3-outbox.md), [phase 3, retry topic](docs/phase-3-retry-topic.md), [phase 4, Avro et Schema Registry](docs/phase-4-avro-schema-registry.md), [phase 5 étape 1, Oracle](docs/phase-5-etape-1-oracle.md), [phase 5 étape 2, MERGE et batch](docs/phase-5-etape-2-merge-batch.md), [phase 6, métriques](docs/phase-6-metriques.md). Versions retenues : [`docs/versions.md`](docs/versions.md) (Oracle, ojdbc17, Testcontainers, Avro 1.11.5, Confluent 7.9.11, Prometheus et Grafana relevés).
+Journal d'apprentissage : [`docs/`](docs/) : [phase 0, Kafka en CLI](docs/phase-0-cli.md), [phase 1, producteur](docs/phase-1-producteur.md), [phase 1, consommateur](docs/phase-1-consommateur.md), [phase 2, rebalancing](docs/phase-2-rebalancing.md), [phase 3, message invalide](docs/phase-3-message-invalide.md), [phase 3, idempotence](docs/phase-3-idempotence.md), [phase 3, outbox](docs/phase-3-outbox.md), [phase 3, retry topic](docs/phase-3-retry-topic.md), [phase 4, Avro et Schema Registry](docs/phase-4-avro-schema-registry.md), [phase 5 étape 1, Oracle](docs/phase-5-etape-1-oracle.md), [phase 5 étape 2, MERGE et batch](docs/phase-5-etape-2-merge-batch.md), [phase 6, métriques](docs/phase-6-metriques.md), [amélioration du DLT](docs/amelioration-dlt.md), [transactions et exactly-once](docs/transactions-exactement-une-fois.md). Versions retenues : [`docs/versions.md`](docs/versions.md) (Oracle, ojdbc17, Testcontainers, Avro 1.11.5, Confluent 7.9.11, Prometheus et Grafana relevés).

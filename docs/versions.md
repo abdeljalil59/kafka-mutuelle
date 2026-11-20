@@ -1,6 +1,6 @@
 # Versions retenues
 
-Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`, puis le 19/11/2026 pour Oracle et Testcontainers (migration de `prelevement-service`). Avro 1.11.5, Confluent 7.9.11 et le Schema Registry (phase 4) relevés le 19/11/2026 : détail dans [phase-4-avro-schema-registry.md](phase-4-avro-schema-registry.md). Environnement : JDK 22.0.2 (compilation en `release 17`), Maven 3.8.6.
+Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`, puis le 19/11/2026 pour Oracle et Testcontainers (migration de `prelevement-service`). Mis à jour le 20/11/2026 : **aucune nouvelle version** pour les transactions, `impaye-service` et la relance (spring-kafka, Jackson et H2 étaient déjà présents). Avro 1.11.5, Confluent 7.9.11 et le Schema Registry (phase 4) relevés le 19/11/2026 : détail dans [phase-4-avro-schema-registry.md](phase-4-avro-schema-registry.md). Environnement : JDK 22.0.2 (compilation en `release 17`), Maven 3.8.6.
 
 ## Versions choisies et résolues
 
@@ -13,12 +13,12 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`, p
 | `kafka-clients` | 4.2.2 | Résolu par `mvn dependency:tree` sur `cotisation-service`. |
 | `spring-kafka-test` (`@EmbeddedKafka`) | 4.1.2 | Résolu, scope test. Apporté par `spring-boot-starter-kafka-test`. |
 | Broker embarqué des tests (`kafka-server`) | 4.2.2 | Résolu, scope test. |
-| `spring-boot-starter-jackson` | 4.1.2 | Résolu par `mvn dependency:tree` (16/11). Apporte `tools.jackson.core:jackson-databind` 3.1.7 (Jackson 3), scope compile. |
+| `spring-boot-starter-jackson` | 4.1.2 | Résolu par `mvn dependency:tree` (16/11). Apporte `tools.jackson.core:jackson-databind` 3.1.7 (Jackson 3), scope compile. Utilisé aussi par `impaye-service` depuis le 20/11/2026 (JSON du topic `impayes.relances`) : `jackson-databind-3.1.7.jar` constaté dans le dépôt Maven local. |
 | Sérialiseur JSON `JacksonJsonSerializer` (`spring-kafka` 4.1.2) | Jackson 3 (`tools.jackson`) | Constaté sur le jar avec `javap` : constructeurs en `tools.jackson.databind.json.JsonMapper`. `JsonSerializer`, lui, utilise Jackson 2 (`com.fasterxml`) et porte une annotation `@Deprecated` dans son fichier de classe (portée non précisée). Non utilisé. |
 | `spring-boot-maven-plugin` | 4.1.2 | Version gérée par `spring-boot-starter-parent`, constatée au build (`repackage` exécuté). |
 | Spring Framework | 7.0.10 | Résolu. |
 | `spring-boot-starter-jdbc` | 4.1.2 | Géré par le BOM de Boot (présent dans `spring-boot-dependencies-4.1.2.pom`). Constaté : `spring-boot-starter-jdbc-4.1.2.jar`, `spring-boot-jdbc-4.1.2.jar` et `HikariCP-7.0.2.jar` sur le classpath des tests de `prelevement-service` (rapport Surefire, 18/11). |
-| H2 (`com.h2database:h2`, scope runtime) | 2.4.240 | `h2.version` du BOM `spring-boot-dependencies` 4.1.2 ; constaté : `h2-2.4.240.jar` sur le classpath des tests. **Depuis le 19/11/2026, utilisé par `cotisation-service` seul (table `outbox`)** : retiré de `prelevement-service`, remplacé par Oracle. |
+| H2 (`com.h2database:h2`, scope runtime) | 2.4.240 | `h2.version` du BOM `spring-boot-dependencies` 4.1.2 ; constaté : `h2-2.4.240.jar` sur le classpath des tests. **Depuis le 19/11/2026, retiré de `prelevement-service` (remplacé par Oracle) ; utilisé par `cotisation-service` (table `outbox`) et, depuis le 20/11/2026, par `impaye-service` (table `impaye`, en mémoire), avec la même version 2.4.240.** |
 | Oracle Database Free, tests (`gvenzl/oracle-free:23.26.4-slim-faststart`) | 23.26.4 | Tag choisi pour les tests (Testcontainers). Constaté dans les journaux du conteneur : version 23.26.4.0.0, répertoire interne `26ai`. Poids : 1,33 Go compressés d'après Docker Hub, 5,13 Go sur disque (constaté). https://github.com/gvenzl/oci-oracle-free |
 | Oracle Database Free 23ai, local | 23ai (version exacte non vérifiée) | Installation locale de l'utilisateur : `localhost:1522`, service `freepdb1`, utilisateur `kafka_mutuelle` (relevé de l'utilisateur ; je ne m'y suis pas connecté). |
 | `ojdbc17` (`com.oracle.database.jdbc`, scope runtime) | 23.26.3.0.0 | `oracle-database.version` du BOM `spring-boot-dependencies` 4.1.2 (constaté) ; jar téléchargé et build vert avec cette version. |
@@ -49,7 +49,7 @@ Relevé du 16/11/2026, mis à jour après l'étape 3a de `cotisation-service`, p
 - **Constatée aussi pour la consommation en groupe** (étape 5 de [phase-1-consommateur.md](phase-1-consommateur.md), section 5) : un client 4.2.2 a rejoint un groupe (protocole `classic`, stratégie `range`), lu, commité des offsets, repris à l'offset commité et quitté le groupe proprement contre le broker 4.4.0.
 - **Constatée aussi pour le rebalancing à deux membres et l'arrêt brutal** ([phase-2-rebalancing.md](phase-2-rebalancing.md)) : deux clients 4.2.2 du même groupe (protocole `classic`, assignor `range`) contre le broker 4.4.0 : répartition des partitions, reprise aux offsets commités, départ propre (`LeaveGroup`) et arrêt brutal d'un processus (détection par le broker après environ 34 à 41 s).
 - **Constatée aussi pour la publication vers un topic de rejets** ([phase-3-message-invalide.md](phase-3-message-invalide.md), sections 4 et 5) : un client 4.2.2 (producteur idempotent, `DelegatingByTypeSerializer`) a publié les messages illisibles sur `<topic>-dlt` contre le broker 4.4.0, et un `NewTopic` appliqué par `KafkaAdmin` a créé le topic de rejets (3 partitions) sur ce broker.
-- **Non prouvé** : le reste du protocole, dont les transactions, `group.protocol=consumer` (KIP-848), `CooperativeStickyAssignor` (présent dans la liste mais non choisi) et plus de deux membres dans un groupe.
+- **Non prouvé** : le reste du protocole, dont les transactions contre le broker réel (constatées seulement sur le broker embarqué 4.2.2 : [transactions-exactement-une-fois.md](transactions-exactement-une-fois.md), §8), `group.protocol=consumer` (KIP-848), `CooperativeStickyAssignor` (présent dans la liste mais non choisi) et plus de deux membres dans un groupe.
 
 ## Non vérifié
 - **Broker embarqué** : `@EmbeddedKafka` démarre un broker 4.2.2, pas 4.4.0.

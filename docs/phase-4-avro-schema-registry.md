@@ -1,5 +1,7 @@
 # Phase 4 : Avro et Schema Registry (`events-contract`, `cotisation-service`, `prelevement-service`)
 
+> **Mise à jour (20/11/2026)** : le schéma du §4 (« Rejets : DefaultErrorHandler → DeadLetterPublishingRecoverer → DelegatingByTypeSerializer ») reste exact pour la sérialisation du DLT, mais le gestionnaire est depuis un `DefaultAfterRollbackProcessor` (commit `3f78c42`), et le `DelegatingByTypeSerializer` sérialise aussi `ResultatPrelevement`, second contrat Avro d'`events-contract` (topic `prelevements.resultats`, commit `9a6a0ca`). Le listener décrit est en mode record. Les comptes de tests (§1) sont périmés : voir le [README](../README.md).
+
 Environnement (19/11/2026, heure locale +01:00) : Spring Boot 4.1.2, spring-kafka 4.1.2, kafka-clients 4.2.2, broker `apache/kafka:4.4.0`, Schema Registry `confluentinc/cp-schema-registry:7.9.11`, Avro 1.11.5, `io.confluent:kafka-avro-serializer` 7.9.11 (`versions.md` n'est pas encore à jour pour ces deux dernières). Outbox : [phase-3-outbox.md](phase-3-outbox.md). Message illisible et DLT : [phase-3-message-invalide.md](phase-3-message-invalide.md).
 
 Pour chaque point : ce qui est **constaté** (test, sortie réelle, source ou doc lue), **déduit** et **non vérifié**. Les résultats de la fumée (section 6) sont des **relevés de l'utilisateur** : je n'ai pas rejoué les services. La doc Confluent lue est celle de la plateforme **8.4**, pas de la 7.9.
