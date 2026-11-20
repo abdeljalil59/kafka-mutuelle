@@ -5,7 +5,7 @@
 > - Il y a **trois** services scrapés : `impaye-service` (port 8084, job `impaye-service`) s'ajoute.
 > - Le dashboard compte **5 lignes et 14 panneaux** : la ligne « Dead Letter Topic » (`0042f62`, filtrée sur `name="kafkaTemplate"` par `d751f53`), puis la ligne « Transactions » (`97e45cd`).
 > - Des séries `kafka_producer_*` existent maintenant (producteur transactionnel) : `kafka_producer_txn_*_time_ns_total`, des **cumuls de temps**, pas des compteurs de transactions (voir [transactions-exactement-une-fois.md](transactions-exactement-une-fois.md), §8).
-> - Les 148 tests (§4) sont devenus 212 ([README](../README.md)).
+> - Les 148 tests (§4) sont devenus 218 ([README](../README.md)).
 
 Environnement (19/11/2026, heure locale +01:00) : Spring Boot 4.1.2, Micrometer 1.17.2, client Prometheus 1.7.0, spring-kafka 4.1.2, kafka-clients 4.2.2, Prometheus v3.16.0, Grafana 13.3.1. Versions : voir [versions.md](versions.md). Étape précédente : [phase-5-etape-2-merge-batch.md](phase-5-etape-2-merge-batch.md).
 

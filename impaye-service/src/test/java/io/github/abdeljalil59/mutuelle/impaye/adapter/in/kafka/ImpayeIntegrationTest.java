@@ -3,10 +3,16 @@ package io.github.abdeljalil59.mutuelle.impaye.adapter.in.kafka;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.timeout;
+import static org.mockito.Mockito.verify;
 
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import io.github.abdeljalil59.mutuelle.events.ResultatPrelevement;
 import io.github.abdeljalil59.mutuelle.events.TypeResultat;
+import io.github.abdeljalil59.mutuelle.impaye.application.PublicationRelanceImpossibleException;
+import io.github.abdeljalil59.mutuelle.impaye.application.port.out.PublicationRelance;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
 import java.net.URI;
@@ -41,11 +47,13 @@ import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 // Le service de bout en bout : Kafka embarqué, registre factice (mock://) partagé avec le producteur de test, et la H2
-// en mémoire du service (schema.sql appliqué par Spring Boot). Le seuil de relance est celui de application.yml (3).
+// en mémoire du service (schema.sql appliqué par Spring Boot). Le seuil de relance est celui de application.yml (3). Les pauses de
+// réessai sont ramenées à 10 ms : le nombre de livraisons ne dépend pas de leur durée.
 //
 // Les résultats sont publiés dans des transactions Kafka, comme le fait prelevement-service : c'est ce qui donne un sens
 // au read_committed du consommateur. Les tests « absent » n'attendent pas un délai : ils publient ensuite une SENTINELLE
@@ -53,7 +61,8 @@ import tools.jackson.databind.json.JsonMapper;
 // précède sur la partition a déjà été livré ou ne le sera jamais : l'absence est une preuve et non un délai trop court.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
-        "spring.kafka.consumer.properties.schema.registry.url=" + ImpayeIntegrationTest.REGISTRE})
+        "spring.kafka.consumer.properties.schema.registry.url=" + ImpayeIntegrationTest.REGISTRE,
+        "kafka.error-handler.interval-ms=10"})
 @AutoConfigureMetrics
 @EmbeddedKafka(topics = "prelevements.resultats", partitions = 3, brokerProperties = {
         "transaction.state.log.replication.factor=1",
@@ -85,6 +94,10 @@ class ImpayeIntegrationTest {
 
     @Autowired
     private JsonMapper jsonMapper;
+
+    // Espion sur le port de publication : il appelle le vrai adaptateur Kafka, sauf là où un test fait échouer l'envoi.
+    @MockitoSpyBean
+    private PublicationRelance publicationRelance;
 
     @Value("${local.server.port}")
     private int portWeb;
@@ -198,6 +211,41 @@ class ImpayeIntegrationTest {
         assertThat(nombreDeLignesDeLAdherent(adherent)).isEqualTo(3);
     }
 
+    // PROUVE la reprise d'une relance dont la publication a échoué (c'était la limite connue : relance perdue). Le 3e rejet est
+    // enregistré, mais ses 4 tentatives de publication échouent (la livraison initiale et les 3 réessais), puis le message est
+    // abandonné : rien n'est publié et aucun impayé n'est marqué. Le 4e rejet de l'adhérent émet alors la relance, avec son
+    // décompte (4) et son montant, et marque tous ses impayés.
+    @Test
+    void une_relance_dont_la_publication_a_echoue_est_emise_au_rejet_suivant() throws Exception {
+        String adherent = "adh-impaye-relance-reprise";
+        PublicationRelanceImpossibleException echec =
+                new PublicationRelanceImpossibleException("broker injoignable (simulé)", new IllegalStateException("cause"));
+        doThrow(echec).doThrow(echec).doThrow(echec).doThrow(echec).doCallRealMethod()
+                .when(publicationRelance).publier(argThat(relance -> adherent.equals(relance.idAdherent())));
+
+        publier(resultat(UUID.randomUUID(), TypeResultat.REJETE, adherent, "110.00"));
+        publier(resultat(UUID.randomUUID(), TypeResultat.REJETE, adherent, "120.00"));
+        publier(resultat(UUID.randomUUID(), TypeResultat.REJETE, adherent, "150.00"));
+
+        verify(publicationRelance, timeout(ATTENTE.toMillis()).times(4))
+                .publier(argThat(relance -> adherent.equals(relance.idAdherent())));
+        // Aucune publication n'a abouti : rien sur le topic, et l'impayé reste en base, non marqué.
+        assertThat(relancesDe(adherent)).isEmpty();
+        assertThat(nombreDeLignesDeLAdherent(adherent)).isEqualTo(3);
+        assertThat(nombreDeLignesMarqueesDeLAdherent(adherent)).isZero();
+
+        publier(resultat(UUID.randomUUID(), TypeResultat.REJETE, adherent, "90.00"));
+
+        await("relance de " + adherent).atMost(ATTENTE).pollInterval(Duration.ofMillis(200))
+                .untilAsserted(() -> assertThat(relancesDe(adherent)).hasSize(1));
+        JsonNode json = jsonMapper.readTree(relancesDe(adherent).get(0).value());
+        assertThat(json.path("nombreRejets").asInt()).isEqualTo(4);
+        assertThat(json.path("dernierMontant").decimalValue()).isEqualByComparingTo("90.00");
+        // Le marquage suit la publication : on l'attend.
+        await("impayés marqués de " + adherent).atMost(ATTENTE).pollInterval(Duration.ofMillis(200))
+                .untilAsserted(() -> assertThat(nombreDeLignesMarqueesDeLAdherent(adherent)).isEqualTo(4));
+    }
+
     // PROUVE : Actuator expose le compteur de doublons au format Prometheus sur /actuator/prometheus (la cible du job
     // impaye-service de prometheus.yml). La série existe dès le démarrage, à 0.
     @Test
@@ -245,6 +293,13 @@ class ImpayeIntegrationTest {
     private void attendreQueLImpayeSoitEnBase(UUID idEvenement) {
         await("impayé " + idEvenement + " en base").atMost(ATTENTE).pollInterval(Duration.ofMillis(200))
                 .untilAsserted(() -> assertThat(nombreDeLignes(idEvenement)).isEqualTo(1));
+    }
+
+    private int nombreDeLignesMarqueesDeLAdherent(String adherent) {
+        return jdbcClient.sql("SELECT COUNT(*) FROM impaye WHERE id_adherent = ? AND relance_emise = TRUE")
+                .param(adherent)
+                .query(Integer.class)
+                .single();
     }
 
     private int nombreDeLignesDeLAdherent(String adherent) {

@@ -18,7 +18,7 @@ Réalisé : les trois services. Pas encore réalisé : `kafka-lab` (dashboard li
 |---|---|---|---|
 | `cotisation-service` | API REST qui émet des cotisations (outbox) | producteur de `cotisations.emises` (Avro) | H2 (table `outbox`) |
 | `prelevement-service` | décide ACCEPTE ou REJETE (plafond), enregistre la décision, publie le résultat | consomme `cotisations.emises`, publie `prelevements.resultats` (Avro) **dans une transaction Kafka**, DLT | Oracle Free 23ai |
-| `impaye-service` | enregistre les prélèvements rejetés, relance un adhérent au N-ième rejet | consomme `prelevements.resultats` en `read_committed` (**sans transaction Kafka**), publie `impayes.relances` (JSON) | H2 en mémoire |
+| `impaye-service` | enregistre les prélèvements rejetés, relance un adhérent dès que ses rejets atteignent le seuil | consomme `prelevements.resultats` en `read_committed` (**sans transaction Kafka**), publie `impayes.relances` (JSON) | H2 en mémoire |
 
 | Topic | Clé | Partitions | Valeur |
 |---|---|---|---|
@@ -68,9 +68,9 @@ Détails et mesures : [transactions-exactement-une-fois.md](docs/transactions-ex
 
 - **Consommation** : `prelevements.resultats` en `read_committed` (le producteur amont est transactionnel : un résultat d'une transaction annulée n'est jamais livré), groupe `impaye-service`, mode record. Les résultats ACCEPTE sont ignorés ; un REJETE devient un impayé. **Pas de transaction Kafka** côté service.
 - **Persistance** : H2 en mémoire, table `impaye` (clé d'idempotence : `id_evenement`, contrainte d'unicité). Un résultat rejoué est ignoré sans exception et gonfle le compteur `impaye_doublons_ignores_total`.
-- **Relance** : quand le nombre d'impayés d'un adhérent atteint **exactement** `app.relance.seuil` (3 par défaut), une relance JSON est publiée sur `impayes.relances` (clé `idAdherent`), une seule fois par adhérent. Un doublon ne relance jamais. Le nombre de rejets est lu en base (`COUNT` par adhérent), pas tenu dans un compteur.
+- **Relance** : quand le nombre d'impayés d'un adhérent atteint `app.relance.seuil` (3 par défaut) et qu'aucune relance n'a encore été émise pour lui, une relance JSON est publiée sur `impayes.relances` (clé `idAdherent`), **une seule par adhérent**. Le nombre de rejets est lu en base (`COUNT` par adhérent), pas tenu dans un compteur. Un drapeau `relance_emise` en base dit si la relance est partie : le cas d'usage **publie d'abord, marque ensuite**. La décision se prend à chaque message, nouveau ou rejoué : un doublon n'ajoute rien (pas de ligne, pas de décompte) et ne relance pas si elle est déjà partie.
 - **Erreurs** : 3 réessais espacés de 1 s, puis le message est journalisé en ERROR et abandonné : **pas de DLT** dans cette première version.
-- **Limite connue** : l'enregistrement et la publication de la relance ne sont pas atomiques. Si la publication échoue, le message est réessayé mais retrouve l'impayé déjà enregistré (doublon) : la relance est perdue. Un état « relance émise » en base ou un outbox corrigerait cela.
+- **Reprise d'une publication ratée** : si la publication échoue, rien n'est marqué ; l'exception remonte, le message est réessayé et, s'il est abandonné, le rejet suivant de l'adhérent émet la relance (décompte et montant de ce rejet-là). Une relance n'est donc **pas perdue**. **Limite assumée** : si le marquage échoue après une publication réussie, le réessai republie : une relance **en double** est possible, donc le consommateur de `impayes.relances` doit être idempotent (sur `idAdherent`). Le service est mono-instance : sa base H2 est propre au processus.
 - **Topic d'entrée non créé par ce service** (`allow.auto.create.topics=false`) : il appartient à `prelevement-service`. Démarré avant lui, `impaye-service` attend le topic au lieu de le faire créer à une seule partition.
 - **Tests** : sans Oracle ni Docker (broker embarqué, registre factice `mock://`, H2). Le `read_committed` est prouvé avec un producteur transactionnel de test, et un témoin négatif (consommateur forcé en `read_uncommitted`) fait échouer le test d'abort.
 
@@ -83,7 +83,7 @@ Détails et mesures : [transactions-exactement-une-fois.md](docs/transactions-ex
 
 ## Tests
 
-**212 tests** : `events-contract` 21, `cotisation-service` 55, `prelevement-service` 109, `impaye-service` 27. Provenance : les trois premiers modules et le nouveau `impaye-service` ont été relevés au `mvn -B verify -pl events-contract,cotisation-service,impaye-service` du 20/11/2026 (103 tests, une minute, sans Oracle) ; les 109 de `prelevement-service` viennent du dernier build complet (leur code n'a pas changé depuis).
+**218 tests** : `events-contract` 21, `cotisation-service` 55, `prelevement-service` 109, `impaye-service` 33. Provenance : `events-contract`, `cotisation-service` et `impaye-service` ont été relevés au `mvn -B verify -pl events-contract,cotisation-service,impaye-service` du 20/11/2026 (109 tests, de une à cinq minutes selon la charge, sans Oracle) ; les 109 de `prelevement-service` viennent du dernier build complet (leur code n'a pas changé depuis).
 
 - Build complet : `mvn -B verify` (Docker et mémoire suffisante pour Oracle).
 - Sans Oracle : `mvn -B verify -pl events-contract,cotisation-service,impaye-service`.

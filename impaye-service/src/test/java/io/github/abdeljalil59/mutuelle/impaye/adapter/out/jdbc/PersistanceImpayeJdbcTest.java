@@ -124,6 +124,53 @@ class PersistanceImpayeJdbcTest {
         assertThat(persistance.compterParAdherent("adh-inconnu")).isZero();
     }
 
+    private List<Boolean> drapeaux(String idAdherent) {
+        return jdbcClient.sql("SELECT relance_emise FROM impaye WHERE id_adherent = ? ORDER BY id")
+                .param(idAdherent).query(Boolean.class).list();
+    }
+
+    // Le drapeau naît à FALSE, se pose pour TOUS les impayés de l'adhérent, et ne touche pas les autres adhérents.
+    @Test
+    void la_relance_n_est_pas_emise_a_l_enregistrement_puis_se_marque_pour_tout_l_adherent() {
+        persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));
+        persistance.enregistrer(new Impaye(UUID.randomUUID(), "adh1", new BigDecimal("120.00"), DECIDE_LE));
+        persistance.enregistrer(new Impaye(UUID.randomUUID(), "adh2", new BigDecimal("110.00"), DECIDE_LE));
+        assertThat(persistance.relanceEmise("adh1")).isFalse();
+        assertThat(drapeaux("adh1")).containsExactly(false, false);
+
+        persistance.marquerRelanceEmise("adh1");
+
+        assertThat(persistance.relanceEmise("adh1")).isTrue();
+        assertThat(drapeaux("adh1")).containsExactly(true, true);
+        assertThat(persistance.relanceEmise("adh2")).isFalse();
+        assertThat(persistance.relanceEmise("adh-inconnu")).isFalse();
+    }
+
+    // Un impayé enregistré APRÈS la relance naît à FALSE, mais l'adhérent reste relancé (une ligne marquée suffit) : c'est ce
+    // qui empêche une seconde relance au rejet suivant.
+    @Test
+    void un_impaye_enregistre_apres_la_relance_ne_defait_pas_la_relance_de_l_adherent() {
+        persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));
+        persistance.marquerRelanceEmise("adh1");
+
+        persistance.enregistrer(new Impaye(UUID.randomUUID(), "adh1", new BigDecimal("90.00"), DECIDE_LE));
+
+        assertThat(drapeaux("adh1")).containsExactly(true, false);
+        assertThat(persistance.relanceEmise("adh1")).isTrue();
+    }
+
+    // L'idempotence n'est pas touchée : un doublon ne modifie ni la ligne ni son drapeau.
+    @Test
+    void un_doublon_ne_defait_pas_le_marquage() {
+        persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));
+        persistance.marquerRelanceEmise("adh1");
+
+        boolean enregistre = persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));
+
+        assertThat(enregistre).isFalse();
+        assertThat(drapeaux("adh1")).containsExactly(true);
+    }
+
     @Test
     void des_evenements_differents_ne_sont_pas_des_doublons() {
         persistance.enregistrer(new Impaye(ID, "adh1", new BigDecimal("150.00"), DECIDE_LE));

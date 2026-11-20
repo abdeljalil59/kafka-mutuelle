@@ -158,7 +158,7 @@ Noter pour chaque expérience : commande, résultat observé, enseignement (fich
 **Reste à faire**
 1. `kafka-lab` : dashboard live (phase 5) et endpoints de scénarios (rafale, message empoisonné, doublon, arrêt d'un consommateur).
 2. Outbox Oracle et Kafka Streams (phase 6) ; ELK éventuel (phase 7).
-3. Limites connues à traiter : relance d'`impaye-service` non atomique avec l'enregistrement et pas de DLT, transactions non prouvées contre le broker réel 4.4.0, aucun panneau Grafana dédié à `impaye-service`.
+3. Limites connues à traiter : `impaye-service` sans DLT et relance possible en double (publier puis marquer ; consommateur à rendre idempotent), transactions non prouvées contre le broker réel 4.4.0, aucun panneau Grafana dédié à `impaye-service`.
 
 **À retenir**
 - `docker compose down -v` supprime le volume `kafka-mutuelle-data` et toutes les données. Utiliser `docker compose down` seul.

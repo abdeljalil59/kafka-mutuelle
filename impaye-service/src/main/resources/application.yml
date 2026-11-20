@@ -60,5 +60,6 @@ impaye:
 
 app:
   relance:
-    # Une relance est émise quand le nombre de rejets d'un adhérent atteint exactement ce seuil (une fois par adhérent).
+    # Une relance est émise quand le nombre de rejets d'un adhérent atteint ce seuil et qu'aucune relance n'est déjà partie pour
+    # lui : une seule par adhérent (drapeau relance_emise). Une publication ratée est rattrapée au réessai ou au rejet suivant.
     seuil: 3

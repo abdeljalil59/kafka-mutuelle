@@ -8,6 +8,10 @@ CREATE TABLE IF NOT EXISTS impaye (
     montant       DECIMAL(19,2) NOT NULL,
     decide_le     TIMESTAMP WITH TIME ZONE NOT NULL,
     enregistre_le TIMESTAMP WITH TIME ZONE NOT NULL,
+    -- Posé à TRUE, pour tous les impayés d'un adhérent EXISTANT à ce moment, quand sa relance a été publiée. Un impayé
+    -- enregistré après la relance naît à FALSE : « une relance a-t-elle été émise pour cet adhérent ? » se lit donc sur
+    -- l'ensemble de ses lignes (au moins une à TRUE), pas sur la ligne qui vient d'arriver.
+    relance_emise BOOLEAN DEFAULT FALSE NOT NULL,
     CONSTRAINT uq_impaye_id_evenement UNIQUE (id_evenement)
 );
 

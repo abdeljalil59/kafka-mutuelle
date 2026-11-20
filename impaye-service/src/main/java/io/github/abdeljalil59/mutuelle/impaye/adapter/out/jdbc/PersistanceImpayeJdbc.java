@@ -15,6 +15,8 @@ public class PersistanceImpayeJdbc implements PersistanceImpaye {
     private static final String INSERTION = "INSERT INTO impaye (id_evenement, id_adherent, montant, decide_le, enregistre_le) "
             + "VALUES (?, ?, ?, ?, ?)";
     private static final String COMPTAGE = "SELECT COUNT(*) FROM impaye WHERE id_adherent = ?";
+    private static final String RELANCE_EMISE = "SELECT COUNT(*) FROM impaye WHERE id_adherent = ? AND relance_emise = TRUE";
+    private static final String MARQUAGE = "UPDATE impaye SET relance_emise = TRUE WHERE id_adherent = ?";
 
     private final JdbcClient jdbcClient;
     private final Clock clock;
@@ -51,5 +53,15 @@ public class PersistanceImpayeJdbc implements PersistanceImpaye {
     @Override
     public long compterParAdherent(String idAdherent) {
         return jdbcClient.sql(COMPTAGE).param(idAdherent).query(Long.class).single();
+    }
+
+    @Override
+    public boolean relanceEmise(String idAdherent) {
+        return jdbcClient.sql(RELANCE_EMISE).param(idAdherent).query(Long.class).single() > 0;
+    }
+
+    @Override
+    public void marquerRelanceEmise(String idAdherent) {
+        jdbcClient.sql(MARQUAGE).param(idAdherent).update();
     }
 }
