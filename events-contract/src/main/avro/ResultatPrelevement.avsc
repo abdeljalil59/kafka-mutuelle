@@ -1,0 +1,33 @@
+{
+  "type": "record",
+  "name": "ResultatPrelevement",
+  "namespace": "io.github.abdeljalil59.mutuelle.events",
+  "doc": "Résultat d'une demande de prélèvement : acceptée ou rejetée",
+  "fields": [
+    {
+      "name": "idEvenement",
+      "type": {"type": "string", "logicalType": "uuid"},
+      "doc": "Identifiant unique de l'événement de résultat (clé d'idempotence aval)"
+    },
+    {
+      "name": "type",
+      "type": {"type": "enum", "name": "TypeResultat", "symbols": ["ACCEPTE", "REJETE"]},
+      "doc": "Décision prise par le prelevement-service"
+    },
+    {
+      "name": "idAdherent",
+      "type": "string",
+      "doc": "Identifiant de l'adhérent (clé Kafka du topic prelevements.resultats)"
+    },
+    {
+      "name": "montant",
+      "type": {"type": "bytes", "logicalType": "decimal", "precision": 19, "scale": 2},
+      "doc": "Montant de la cotisation traitée"
+    },
+    {
+      "name": "decideLe",
+      "type": {"type": "long", "logicalType": "timestamp-micros"},
+      "doc": "Horodatage de la décision"
+    }
+  ]
+}
