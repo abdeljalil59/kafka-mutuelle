@@ -585,6 +585,466 @@
           "sort": "none"
         }
       }
+    },
+    {
+      "id": 13,
+      "type": "row",
+      "title": "Transactions",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "panels": []
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Résultats publiés",
+      "description": "Résultats envoyés sur prelevements.resultats depuis le démarrage du service (timer du KafkaTemplate des résultats : spring_kafka_template_seconds_count, name=resultatsKafkaTemplate, result=success). Ce sont des envois ACQUITTÉS par le broker : un envoi dont la transaction est ensuite annulée est compté ici mais reste invisible en read_committed. Total non ventilé par type : ce timer n'a pas d'étiquette métier. La ventilation ACCEPTE / REJETE existe pour les décisions écrites en base (panneau « Décisions de prélèvement par minute »), mais elle ignore les messages rejoués (D4) alors que ceux-ci republient leur résultat : les deux chiffres ne sont pas égaux. Le compteur repart de 0 au redémarrage du service. Filtré sur name=resultatsKafkaTemplate : les envois au DLT (kafkaTemplate) sont exclus.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 37
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(spring_kafka_template_seconds_count{job=\"prelevement-service\",name=\"resultatsKafkaTemplate\",result=\"success\"})",
+          "legendFormat": "résultats publiés",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Débit des résultats publiés",
+      "description": "Envois acquittés par seconde sur prelevements.resultats (rate sur 1 min de la même série que le panneau « Résultats publiés »). Même réserve : un envoi dont la transaction est annulée est compté. Une réécriture du même message après redélivrance (échec transitoire) compte donc deux envois pour un seul résultat visible.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 37
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(spring_kafka_template_seconds_count{job=\"prelevement-service\",name=\"resultatsKafkaTemplate\",result=\"success\"}[1m]))",
+          "legendFormat": "résultats/s",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Traitements validés / annulés par minute",
+      "description": "Un traitement est un appel du listener, donc une transaction Kafka (mode record : une transaction par message). Validés : listener réussi (spring_kafka_listener_seconds_count, result=success) = commit du résultat et de l'offset. Annulés : listener en échec (result=failure) = abort, puis redélivrance ou envoi au DLT. L'équivalence « échec du listener = transaction annulée » est DÉDUITE de la sémantique de Spring Kafka et prouvée par ExactlyOnceIntegrationTest ; elle n'est pas lue sur un compteur de transactions, car kafka-clients n'en expose pas (voir le panneau suivant). La transaction du recoverer (envoi au DLT + offset) n'est pas comptée. La série « annulés » n'existe qu'après un premier échec : « No data » est normal tant qu'aucun traitement n'a échoué. La démo @RetryableTopic, si elle est activée, n'est pas transactionnelle mais alimente aussi ce timer.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(spring_kafka_listener_seconds_count{job=\"prelevement-service\",result=\"success\"}[1m]))",
+          "legendFormat": "validés (commit)",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(spring_kafka_listener_seconds_count{job=\"prelevement-service\",result=\"failure\"}[1m]))",
+          "legendFormat": "annulés (abort)",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "validés (commit)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "annulés (abort)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Temps passé en commit et en abort (producer)",
+      "description": "kafka_producer_txn_commit_time_ns_total et kafka_producer_txn_abort_time_ns_total. Constaté sur /actuator/prometheus et dans les sources de kafka-clients : le producer n'expose que des CUMULS DE TEMPS en nanosecondes (« Total time producer has spent in commitTransaction in nanoseconds »), jamais de compteur de commits ou d'aborts ; les noms kafka_producer_txn_commit_total et kafka_producer_txn_abort_total n'existent pas. Ce panneau affiche donc les secondes passées dans chaque appel sur 5 minutes, pas un nombre de transactions : la série abort sort de 0 dès qu'une transaction a été annulée. Pour des nombres, voir « Traitements validés / annulés par minute ».",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 45
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(kafka_producer_txn_commit_time_ns_total{job=\"prelevement-service\"}[5m])) / 1e9",
+          "legendFormat": "commitTransaction",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(kafka_producer_txn_abort_time_ns_total{job=\"prelevement-service\"}[5m])) / 1e9",
+          "legendFormat": "abortTransaction",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "commitTransaction"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "green"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "abortTransaction"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Latence de publication des résultats",
+      "description": "Durée d'un envoi sur prelevements.resultats (spring_kafka_template_seconds_sum / _count, name=resultatsKafkaTemplate, result=success) : moyenne sur 1 min et maximum. Elle va de l'envoi à l'accusé du broker ; le commit de la transaction vient après (déduit : il se mesure côté producer, panneau « Temps passé en commit et en abort »). « No data » ou NaN est normal sans trafic.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 53
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(spring_kafka_template_seconds_sum{job=\"prelevement-service\",name=\"resultatsKafkaTemplate\",result=\"success\"}[1m])) / sum(rate(spring_kafka_template_seconds_count{job=\"prelevement-service\",name=\"resultatsKafkaTemplate\",result=\"success\"}[1m]))",
+          "legendFormat": "moyenne",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max(spring_kafka_template_seconds_max{job=\"prelevement-service\",name=\"resultatsKafkaTemplate\",result=\"success\"})",
+          "legendFormat": "maximum",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Échecs d'envoi des résultats",
+      "description": "Envois sur prelevements.resultats en échec (result=failure) sur 5 minutes, name=resultatsKafkaTemplate : les échecs d'envoi au DLT (kafkaTemplate) sont exclus et suivis par « Échecs d'envoi au DLT ». La série n'existe qu'après un premier échec : « No data » est normal tant qu'aucun envoi n'a échoué. Un échec d'envoi fait lever PublicationResultatImpossibleException : la transaction est annulée, le message redélivré, puis envoyé au DLT après 5 livraisons.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 53
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(spring_kafka_template_seconds_count{job=\"prelevement-service\",name=\"resultatsKafkaTemplate\",result=\"failure\"}[5m])",
+          "legendFormat": "envois en échec",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
     }
   ]
 }
