@@ -57,7 +57,9 @@ import org.springframework.test.annotation.DirtiesContext;
         "prelevement.kafka.retry-demo.actif=true",
         "prelevement.kafka.retry-demo.backoff-delay=500",
         "prelevement.kafka.retry-demo.backoff-multiplier=1"})
-@EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
+@EmbeddedKafka(topics = "cotisations.emises", partitions = 3, brokerProperties = {
+        "transaction.state.log.replication.factor=1",
+        "transaction.state.log.min.isr=1"})
 @DirtiesContext
 class RetryDemoIntegrationTest extends OracleIntegrationTest {
 
@@ -168,7 +170,7 @@ class RetryDemoIntegrationTest extends OracleIntegrationTest {
         // passages du topic de retry quand le message d'origine avait déjà attendu 5 s (démarrage à froid).
         assertThat(retry2.timestamp() - principal.timestamp()).isGreaterThanOrEqualTo(DELAI_MS - MARGE_MS);
         // En-têtes du mécanisme de retry : préfixe kafka_exception- et kafka_original- (et non kafka_dlt-, celui du
-        // DLT du DefaultErrorHandler de la source), constaté ci-dessus. Le topic d'origine reste le topic principal.
+        // DLT du DefaultAfterRollbackProcessor de la source), constaté ci-dessus. Le topic d'origine reste le topic principal.
         assertThat(texte(dlt, "kafka_exception-cause-fqcn")).isEqualTo("java.lang.RuntimeException");
         assertThat(texte(dlt, "kafka_original-topic")).isEqualTo(TOPIC_DEMO);
     }

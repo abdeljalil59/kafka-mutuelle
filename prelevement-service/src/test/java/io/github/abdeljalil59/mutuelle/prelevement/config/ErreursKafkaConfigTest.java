@@ -3,7 +3,9 @@ package io.github.abdeljalil59.mutuelle.prelevement.config;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -16,6 +18,7 @@ import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import io.github.abdeljalil59.mutuelle.prelevement.AvroTestUtil;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.PrelevementInvalideException;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,15 +29,21 @@ import java.util.concurrent.CompletableFuture;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.PartitionInfo;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.SerializationException;
 import org.apache.kafka.common.serialization.Serializer;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.beans.factory.config.YamlPropertiesFactoryBean;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.AfterRollbackProcessor;
+import org.springframework.kafka.listener.ContainerProperties;
+import org.springframework.kafka.listener.DefaultAfterRollbackProcessor;
 import org.springframework.kafka.listener.ListenerExecutionFailedException;
 import org.springframework.kafka.listener.MessageListenerContainer;
 import org.springframework.kafka.listener.RetryListener;
@@ -68,24 +77,44 @@ class ErreursKafkaConfigTest {
 
     // Intervalle de 1 ms : ces tests comptent des livraisons, pas des secondes. La suite réelle des pauses (1, 2, 4, 8 s) est
     // vérifiée sur le BackOff lui-même.
-    private DefaultErrorHandler gestionnaire(KafkaTemplate<Object, Object> modele) {
-        return (DefaultErrorHandler) config.gestionnaireErreursConsommation(modele, "cotisations.emises", 1L, 2.0, 4);
+    @SuppressWarnings("unchecked")
+    private DefaultAfterRollbackProcessor<Object, Object> traitement(KafkaTemplate<Object, Object> modele) {
+        return (DefaultAfterRollbackProcessor<Object, Object>) config.traitementApresRollback(
+                modele, "cotisations.emises", 1L, 2.0, 4);
     }
 
-    // Nombre de livraisons jusqu'à l'envoi au topic de rejets : un handleOne par livraison échouée.
-    private int livraisonsJusquAuRejet(DefaultErrorHandler gestionnaire, Exception exception) {
+    // Une livraison échouée : le container annule la transaction, puis appelle le processeur avec le message en échec.
+    @SuppressWarnings("unchecked")
+    private void livrerUnEchec(DefaultAfterRollbackProcessor<Object, Object> traitement, Exception exception) {
+        ConsumerRecord<Object, Object> message = new ConsumerRecord<>("cotisations.emises", 0, 5L, "adh1", "valeur");
+        MessageListenerContainer conteneur = mock(MessageListenerContainer.class);
+        when(conteneur.getContainerProperties()).thenReturn(new ContainerProperties("cotisations.emises"));
+        // Le recoverer vérifie l'existence de la partition sur le topic de rejets via le CONSOMMATEUR (partitionsFor), pas
+        // via le template (bytecode de DeadLetterPublishingRecoverer.checkPartition) : sans réponse, il laisse la partition
+        // vide et le broker choisit. Le topic de rejets a 3 partitions, comme le topic source.
+        Consumer<Object, Object> consommateur = mock(Consumer.class);
+        when(consommateur.partitionsFor(eq(TOPIC_REJETS), any(Duration.class))).thenReturn(List.of(
+                new PartitionInfo(TOPIC_REJETS, 0, null, null, null),
+                new PartitionInfo(TOPIC_REJETS, 1, null, null, null),
+                new PartitionInfo(TOPIC_REJETS, 2, null, null, null)));
+        traitement.process(List.of(message), consommateur, conteneur, exception, true, ContainerProperties.EOSMode.V2);
+    }
+
+    // Le rejet est publié par le recoverer au moment où les réessais sont épuisés (ou aussitôt, pour une erreur fatale).
+    private static boolean rejetEnvoye(KafkaTemplate<Object, Object> modele) {
+        return mockingDetails(modele).getInvocations().stream()
+                .anyMatch(appel -> appel.getMethod().getName().equals("send"));
+    }
+
+    // Nombre de livraisons échouées jusqu'à l'envoi au topic de rejets.
+    private int livraisonsJusquAuRejet(DefaultAfterRollbackProcessor<Object, Object> traitement,
+            KafkaTemplate<Object, Object> modele, Exception exception) {
         int livraisons = 0;
-        boolean recupere = false;
-        while (!recupere && livraisons < 20) {
+        while (livraisons < 20 && !rejetEnvoye(modele)) {
             livraisons++;
-            recupere = recupere(gestionnaire, exception);
+            livrerUnEchec(traitement, exception);
         }
         return livraisons;
-    }
-
-    private boolean recupere(DefaultErrorHandler gestionnaire, Exception exception) {
-        ConsumerRecord<String, String> message = new ConsumerRecord<>("cotisations.emises", 0, 5L, "adh1", "valeur");
-        return gestionnaire.handleOne(exception, message, mock(Consumer.class), mock(MessageListenerContainer.class));
     }
 
     @Test
@@ -145,26 +174,59 @@ class ErreursKafkaConfigTest {
     @Test
     void ne_reessaie_pas_une_PrelevementInvalideException_et_l_envoie_aussitot_au_topic_de_rejets() {
         KafkaTemplate<Object, Object> modele = modeleDeRejetsFactice();
-        DefaultErrorHandler gestionnaire = gestionnaire(modele);
 
         // Première livraison seulement : la classification (parcours des causes) évite tout réessai.
-        boolean recupere = recupere(gestionnaire, new ListenerExecutionFailedException(
+        livrerUnEchec(traitement(modele), new ListenerExecutionFailedException(
                 "échec du listener", new PrelevementInvalideException("montant doit être strictement positif")));
 
-        assertThat(recupere).isTrue();
         verify(modele).send(any(ProducerRecord.class));
     }
 
     @Test
     void reessaie_une_autre_exception_au_lieu_de_l_envoyer_aussitot_au_topic_de_rejets() {
         KafkaTemplate<Object, Object> modele = modeleDeRejetsFactice();
-        DefaultErrorHandler gestionnaire = gestionnaire(modele);
 
-        boolean recupere = recupere(gestionnaire, new ListenerExecutionFailedException(
+        livrerUnEchec(traitement(modele), new ListenerExecutionFailedException(
                 "échec du listener", new IllegalStateException("base indisponible")));
 
-        assertThat(recupere).isFalse();
         verify(modele, never()).send(any(ProducerRecord.class));
+    }
+
+    // Sous transaction, c'est le processeur d'après-rollback qui gère l'échec, et non un DefaultErrorHandler.
+    @Test
+    @SuppressWarnings("unchecked")
+    void le_bean_est_un_DefaultAfterRollbackProcessor_et_publie_au_topic_de_rejets_sur_la_partition_d_origine() {
+        KafkaTemplate<Object, Object> modele = modeleDeRejetsFactice();
+        AfterRollbackProcessor<Object, Object> bean = config.traitementApresRollback(
+                modele, "cotisations.emises", 1L, 2.0, 4);
+
+        assertThat(bean).isInstanceOf(DefaultAfterRollbackProcessor.class);
+
+        livrerUnEchec((DefaultAfterRollbackProcessor<Object, Object>) bean, new ListenerExecutionFailedException(
+                "échec du listener", new PrelevementInvalideException("montant doit être strictement positif")));
+
+        ArgumentCaptor<ProducerRecord<Object, Object>> rejet = ArgumentCaptor.forClass(ProducerRecord.class);
+        verify(modele).send(rejet.capture());
+        assertThat(rejet.getValue().topic()).isEqualTo(TOPIC_REJETS);
+        assertThat(rejet.getValue().partition()).isZero();
+    }
+
+    // commitRecovered : l'offset du message récupéré est validé dans la transaction du processeur, avec l'envoi au topic de
+    // rejets. Sans cela, le message serait redélivré (et envoyé une seconde fois au rejet) après un redémarrage.
+    @Test
+    @SuppressWarnings("unchecked")
+    void valide_l_offset_du_message_recupere_dans_la_transaction() {
+        KafkaTemplate<Object, Object> modele = modeleDeRejetsFactice();
+        when(modele.isTransactional()).thenReturn(true);
+
+        livrerUnEchec(traitement(modele), new ListenerExecutionFailedException(
+                "échec du listener", new PrelevementInvalideException("montant doit être strictement positif")));
+
+        ArgumentCaptor<Map<TopicPartition, OffsetAndMetadata>> offsets = ArgumentCaptor.forClass(Map.class);
+        verify(modele).sendOffsetsToTransaction(offsets.capture(), any());
+        assertThat(offsets.getValue()).containsOnlyKeys(new TopicPartition("cotisations.emises", 0));
+        // Offset du message récupéré (5) + 1 : le prochain à lire.
+        assertThat(offsets.getValue().get(new TopicPartition("cotisations.emises", 0)).offset()).isEqualTo(6L);
     }
 
     @Test
@@ -213,9 +275,8 @@ class ErreursKafkaConfigTest {
     @Test
     void cinq_livraisons_pour_une_erreur_reessayable_puis_un_seul_envoi_au_topic_de_rejets() {
         KafkaTemplate<Object, Object> modele = modeleDeRejetsFactice();
-        DefaultErrorHandler gestionnaire = gestionnaire(modele);
 
-        int livraisons = livraisonsJusquAuRejet(gestionnaire, new ListenerExecutionFailedException(
+        int livraisons = livraisonsJusquAuRejet(traitement(modele), modele, new ListenerExecutionFailedException(
                 "échec du listener", new IllegalStateException("base indisponible")));
 
         assertThat(livraisons).isEqualTo(5);
@@ -225,9 +286,8 @@ class ErreursKafkaConfigTest {
     @Test
     void une_seule_livraison_pour_une_PrelevementInvalideException_puis_un_envoi_au_topic_de_rejets() {
         KafkaTemplate<Object, Object> modele = modeleDeRejetsFactice();
-        DefaultErrorHandler gestionnaire = gestionnaire(modele);
 
-        int livraisons = livraisonsJusquAuRejet(gestionnaire, new ListenerExecutionFailedException(
+        int livraisons = livraisonsJusquAuRejet(traitement(modele), modele, new ListenerExecutionFailedException(
                 "échec du listener", new PrelevementInvalideException("montant doit être strictement positif")));
 
         assertThat(livraisons).isEqualTo(1);
@@ -237,9 +297,8 @@ class ErreursKafkaConfigTest {
     @Test
     void une_seule_livraison_pour_un_message_illisible_puis_un_envoi_au_topic_de_rejets() {
         KafkaTemplate<Object, Object> modele = modeleDeRejetsFactice();
-        DefaultErrorHandler gestionnaire = gestionnaire(modele);
 
-        int livraisons = livraisonsJusquAuRejet(gestionnaire, new ListenerExecutionFailedException("échec du listener",
+        int livraisons = livraisonsJusquAuRejet(traitement(modele), modele, new ListenerExecutionFailedException("échec du listener",
                 new DeserializationException("failed to deserialize", new byte[] {1, 2, 3}, false,
                         new IllegalStateException("octet magique inconnu"))));
 
@@ -250,9 +309,9 @@ class ErreursKafkaConfigTest {
     @Test
     void notifie_le_retry_listener_des_echecs_de_livraison_puis_de_la_recuperation() {
         KafkaTemplate<Object, Object> modele = modeleDeRejetsFactice();
-        DefaultErrorHandler gestionnaire = gestionnaire(modele);
+        DefaultAfterRollbackProcessor<Object, Object> traitement = traitement(modele);
         List<String> evenements = new ArrayList<>();
-        gestionnaire.setRetryListeners(new RetryListener() {
+        traitement.setRetryListeners(new RetryListener() {
             @Override
             public void failedDelivery(ConsumerRecord<?, ?> record, Exception ex, int deliveryAttempt) {
                 evenements.add("echec " + deliveryAttempt);
@@ -264,7 +323,7 @@ class ErreursKafkaConfigTest {
             }
         });
 
-        livraisonsJusquAuRejet(gestionnaire, new ListenerExecutionFailedException(
+        livraisonsJusquAuRejet(traitement, modele, new ListenerExecutionFailedException(
                 "échec du listener", new IllegalStateException("base indisponible")));
 
         // Constaté : failedDelivery est notifié à CHAQUE livraison échouée, y compris la dernière (la 5e), avant la

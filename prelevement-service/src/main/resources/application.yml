@@ -7,6 +7,9 @@ spring:
       schema.registry.url: http://localhost:8082
     consumer:
       group-id: prelevement-service
+      # cotisations.emises est écrit sans transaction : read_committed le lit comme read_uncommitted (messages non
+      # transactionnels renvoyés dans les deux modes, doc Kafka). Posé pour le jour où l'amont devient transactionnel.
+      isolation-level: read-committed
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       # ErrorHandlingDeserializer conservé autour du désérialiseur Avro : un message illisible part au topic
@@ -17,6 +20,17 @@ spring:
         specific.avro.reader: true
     listener:
       concurrency: 1
+    # Transactions Kafka : lecture de cotisations.emises, MERGE Oracle, publication sur prelevements.resultats. Le préfixe
+    # doit être UNIQUE PAR INSTANCE du service (doc spring-kafka) : deux instances de même préfixe se fencent mutuellement.
+    # Oracle ne participe pas à la transaction Kafka ; l'idempotence du MERGE couvre le rejeu.
+    producer:
+      transaction-id-prefix: ${KAFKA_TRANSACTION_ID_PREFIX:tx-prelevement-}
+    # D8 : le kafkaTemplate de Boot partage la fabrique transactionnelle. Le relais de @RetryableTopic (démo, containers
+    # non transactionnels) publie avec lui HORS transaction : sans cette option, chaque envoi échoue avec « No transaction
+    # is in process » (constaté, RetryDemoIntegrationTest). Ne concerne que le template de Boot : resultatsKafkaTemplate,
+    # construit dans ResultatsKafkaConfig, reste strictement transactionnel.
+    template:
+      allow-non-transactional: true
   # Oracle Free 23ai local (port 1522, service freepdb1) par défaut. Le service ne démarre pas sans base.
   # URL, utilisateur et mot de passe se surchargent par les variables d'environnement PRELEVEMENT_DB_URL,
   # PRELEVEMENT_DB_USER et PRELEVEMENT_DB_PASSWORD (les valeurs par défaut sont celles du développement local).
@@ -42,7 +56,7 @@ management:
       exposure:
         include: health,metrics,prometheus
 
-# Réessais de la consommation avant l'envoi au topic de rejets (DefaultErrorHandler, ExponentialBackOffWithMaxRetries) :
+# Réessais de la consommation avant l'envoi au topic de rejets (DefaultAfterRollbackProcessor, ExponentialBackOffWithMaxRetries) :
 # 4 réessais à 1 s, 2 s, 4 s puis 8 s, soit 5 livraisons et 15 s au plus. initial-interval en millisecondes.
 # Une PrelevementInvalideException et un message illisible ne sont jamais réessayés (1 livraison).
 kafka:

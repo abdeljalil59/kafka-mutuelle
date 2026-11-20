@@ -39,8 +39,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.CommonErrorHandler;
-import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.AfterRollbackProcessor;
+import org.springframework.kafka.listener.DefaultAfterRollbackProcessor;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -54,7 +54,9 @@ import org.springframework.test.annotation.DirtiesContext;
 @SpringBootTest(properties = {
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE})
-@EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
+@EmbeddedKafka(topics = "cotisations.emises", partitions = 3, brokerProperties = {
+        "transaction.state.log.replication.factor=1",
+        "transaction.state.log.min.isr=1"})
 @DirtiesContext
 class MessageInvalideIntegrationTest extends OracleIntegrationTest {
 
@@ -75,9 +77,9 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
     @Autowired
     private EmbeddedKafkaBroker embeddedKafka;
 
-    // Le même gestionnaire que celui du conteneur : on y pose un RetryListener pour compter les livraisons.
+    // Le même processeur que celui du conteneur : on y pose un RetryListener pour compter les livraisons.
     @Autowired
-    private CommonErrorHandler gestionnaireErreurs;
+    private AfterRollbackProcessor<Object, Object> traitementApresRollback;
 
     @Value("${spring.kafka.bootstrap-servers}")
     private String bootstrapServers;
@@ -100,7 +102,7 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
         producteurAvro = new KafkaTemplate<>(usineAvro);
 
         livraisons = new CompteurDeLivraisons();
-        ((DefaultErrorHandler) gestionnaireErreurs).setRetryListeners(livraisons);
+        ((DefaultAfterRollbackProcessor<?, ?>) traitementApresRollback).setRetryListeners(livraisons);
 
         // Lecteur du DLT : sans commit ; ses partitions sont assignées à la demande (voir lireLesRejetsDeLaCle).
         consommateurRejets = new KafkaConsumer<>(Map.<String, Object>of(
@@ -112,7 +114,7 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
 
     @AfterEach
     void libere_le_producteur_et_le_consommateur() {
-        ((DefaultErrorHandler) gestionnaireErreurs).setRetryListeners();
+        ((DefaultAfterRollbackProcessor<?, ?>) traitementApresRollback).setRetryListeners();
         consommateurRejets.close();
         usine.destroy();
         usineAvro.destroy();

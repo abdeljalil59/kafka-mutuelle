@@ -52,7 +52,9 @@ import org.springframework.test.annotation.DirtiesContext;
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE})
 @AutoConfigureMetrics
-@EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
+@EmbeddedKafka(topics = "cotisations.emises", partitions = 3, brokerProperties = {
+        "transaction.state.log.replication.factor=1",
+        "transaction.state.log.min.isr=1"})
 @DirtiesContext
 class CotisationEmiseListenerIntegrationTest extends OracleIntegrationTest {
 

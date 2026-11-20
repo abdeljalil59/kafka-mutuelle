@@ -47,8 +47,8 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaOperations;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.CommonErrorHandler;
-import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.AfterRollbackProcessor;
+import org.springframework.kafka.listener.DefaultAfterRollbackProcessor;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -63,7 +63,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
         "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
         "spring.kafka.properties.schema.registry.url=" + AvroTestUtil.REGISTRE,
         "kafka.error-handler.initial-interval=10"})
-@EmbeddedKafka(topics = "cotisations.emises", partitions = 3)
+@EmbeddedKafka(topics = "cotisations.emises", partitions = 3, brokerProperties = {
+        "transaction.state.log.replication.factor=1",
+        "transaction.state.log.min.isr=1"})
 @DirtiesContext
 class PublicationResultatsIntegrationTest extends OracleIntegrationTest {
 
@@ -85,9 +87,9 @@ class PublicationResultatsIntegrationTest extends OracleIntegrationTest {
     @Autowired
     private JdbcClient jdbcClient;
 
-    // Le même gestionnaire que celui du conteneur : on y pose un RetryListener pour compter les livraisons.
+    // Le même processeur que celui du conteneur : on y pose un RetryListener pour compter les livraisons.
     @Autowired
-    private CommonErrorHandler gestionnaireErreurs;
+    private AfterRollbackProcessor<Object, Object> traitementApresRollback;
 
     // Espion sur le template des résultats : il appelle le vrai template, sauf là où un test fait échouer l'envoi. Le nom
     // est obligatoire : le template de Boot (kafkaTemplate, celui du topic de rejets) est aussi un KafkaOperations.
@@ -102,12 +104,12 @@ class PublicationResultatsIntegrationTest extends OracleIntegrationTest {
         usine = AvroTestUtil.usineAvro(embeddedKafka);
         producteur = new KafkaTemplate<>(usine);
         livraisons = new CompteurDeLivraisons();
-        ((DefaultErrorHandler) gestionnaireErreurs).setRetryListeners(livraisons);
+        ((DefaultAfterRollbackProcessor<?, ?>) traitementApresRollback).setRetryListeners(livraisons);
     }
 
     @AfterEach
     void libere_le_producteur_et_le_compteur() {
-        ((DefaultErrorHandler) gestionnaireErreurs).setRetryListeners();
+        ((DefaultAfterRollbackProcessor<?, ?>) traitementApresRollback).setRetryListeners();
         usine.destroy();
     }
 

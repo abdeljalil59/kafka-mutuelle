@@ -7,7 +7,7 @@ import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.springframework.kafka.listener.RetryListener;
 
-// RetryListener de test, posé sur le DefaultErrorHandler du contexte (setRetryListeners) : aucun changement du code de
+// RetryListener de test, posé sur le DefaultAfterRollbackProcessor du contexte (setRetryListeners) : aucun changement du code de
 // production. Compte par clé de message les livraisons échouées et les récupérations (envois au topic de rejets).
 // Constaté (ErreursKafkaConfigTest) : failedDelivery est notifié à chaque livraison échouée, y compris la dernière,
 // donc le nombre de livraisons d'un message rejeté est son nombre de failedDelivery.

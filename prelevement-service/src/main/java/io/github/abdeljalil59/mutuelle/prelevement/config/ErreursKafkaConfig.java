@@ -18,9 +18,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.TopicBuilder;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.CommonErrorHandler;
+import org.springframework.kafka.listener.AfterRollbackProcessor;
 import org.springframework.kafka.listener.DeadLetterPublishingRecoverer;
-import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.listener.DefaultAfterRollbackProcessor;
 import org.springframework.kafka.support.ExponentialBackOffWithMaxRetries;
 import org.springframework.kafka.support.serializer.DelegatingByTypeSerializer;
 import org.springframework.util.backoff.BackOff;
@@ -72,16 +72,21 @@ public class ErreursKafkaConfig {
         };
     }
 
+    // Le container est transactionnel (spring.kafka.producer.transaction-id-prefix) : une exception du listener annule la
+    // transaction (résultat non publié, offset non validé), puis c'est ce processeur, et non plus un DefaultErrorHandler, qui
+    // replace le consommateur sur le message. Il ne gère que des listeners par record : en mode batch, il redélivre le lot
+    // entier sans jamais appeler le recoverer (laboratoire, TransactionsKafkaLabTest).
     // Réessais exponentiels bornés (kafka.error-handler.* dans application.yml) : avec 1000 ms, un multiplicateur de 2 et
     // 4 réessais, les pauses sont de 1, 2, 4 puis 8 s : 5 livraisons et 15 s au plus avant le topic de rejets. Les
     // pauses bloquent le thread du consommateur (BackOffHandler par défaut) ; la doc plafonne chaque pause par ce qui
-    // reste de max.poll.interval.ms. Le défaut de DefaultErrorHandler, FixedBackOff(0, 9), faisait 10 livraisons sans
-    // pause : il épuisait ses réessais en millisecondes, donc une panne passagère d'Oracle envoyait tout au DLT.
+    // reste de max.poll.interval.ms.
+    // commitRecovered avec le kafkaTemplate des rejets : le rejet est publié dans une nouvelle transaction qui valide aussi
+    // l'offset du message récupéré (doc spring-kafka), sans quoi le message serait redélivré après un redémarrage.
     // Une DeserializationException est fatale par défaut : le message part directement au topic de rejets (1 livraison).
     // Avec Avro, les invariants du contrat ne sont plus vérifiés à la désérialisation mais par DemandePrelevement :
     // une PrelevementInvalideException est déterministe, la réessayer n'apporte rien (1 livraison aussi).
     @Bean
-    CommonErrorHandler gestionnaireErreursConsommation(
+    AfterRollbackProcessor<Object, Object> traitementApresRollback(
             @Qualifier("kafkaTemplate") KafkaTemplate<Object, Object> kafkaTemplate,
             @Value("${prelevement.kafka.topic}") String topicSource,
             @Value("${kafka.error-handler.initial-interval}") long intervalleInitialMs,
@@ -89,10 +94,10 @@ public class ErreursKafkaConfig {
             @Value("${kafka.error-handler.max-retries}") int reessaisMax) {
         DeadLetterPublishingRecoverer recoverer = new DeadLetterPublishingRecoverer(kafkaTemplate,
                 (message, exception) -> new TopicPartition(topicRejets(topicSource), message.partition()));
-        DefaultErrorHandler gestionnaire = new DefaultErrorHandler(recoverer,
-                backOffDeConsommation(intervalleInitialMs, multiplicateur, reessaisMax));
-        gestionnaire.addNotRetryableExceptions(PrelevementInvalideException.class);
-        return gestionnaire;
+        DefaultAfterRollbackProcessor<Object, Object> traitement = new DefaultAfterRollbackProcessor<>(recoverer,
+                backOffDeConsommation(intervalleInitialMs, multiplicateur, reessaisMax), kafkaTemplate, true);
+        traitement.addNotRetryableExceptions(PrelevementInvalideException.class);
+        return traitement;
     }
 
     // Isolé du bean pour que les tests lisent la suite des pauses sans démarrer de contexte. L'intervalle maximal
