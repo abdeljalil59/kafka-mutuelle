@@ -3,6 +3,7 @@ package io.github.abdeljalil59.mutuelle.prelevement.config;
 import io.github.abdeljalil59.mutuelle.prelevement.adapter.out.jdbc.JournalDecisionsJdbc;
 import io.github.abdeljalil59.mutuelle.prelevement.application.TraiterDemandePrelevement;
 import io.github.abdeljalil59.mutuelle.prelevement.application.port.out.JournalDecisions;
+import io.github.abdeljalil59.mutuelle.prelevement.application.port.out.PublicationResultats;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.PlafondPrelevement;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.math.BigDecimal;
@@ -32,8 +33,8 @@ public class PrelevementConfig {
     }
 
     @Bean
-    TraiterDemandePrelevement traiterDemandePrelevement(
-            PlafondPrelevement plafond, JournalDecisions journalDecisions, Clock clock) {
-        return new TraiterDemandePrelevement(plafond, journalDecisions, clock);
+    TraiterDemandePrelevement traiterDemandePrelevement(PlafondPrelevement plafond, JournalDecisions journalDecisions,
+            PublicationResultats publicationResultats, Clock clock) {
+        return new TraiterDemandePrelevement(plafond, journalDecisions, publicationResultats, clock);
     }
 }

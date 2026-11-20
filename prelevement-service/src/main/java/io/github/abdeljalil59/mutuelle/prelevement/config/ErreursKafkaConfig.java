@@ -1,6 +1,7 @@
 package io.github.abdeljalil59.mutuelle.prelevement.config;
 
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
+import io.github.abdeljalil59.mutuelle.events.ResultatPrelevement;
 import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.PrelevementInvalideException;
 import java.time.Duration;
@@ -9,6 +10,7 @@ import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.config.TopicConfig;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.kafka.autoconfigure.DefaultKafkaProducerFactoryCustomizer;
 import org.springframework.context.annotation.Bean;
@@ -53,7 +55,8 @@ public class ErreursKafkaConfig {
     }
 
     // Les rejets contiennent soit les octets d'origine (désérialisation ratée), soit un CotisationEmise Avro
-    // (exception dans le listener) : un seul KafkaTemplate, sérialiseur choisi par type exact.
+    // (exception dans le listener) ; les résultats publiés sont des ResultatPrelevement Avro (ResultatsKafkaConfig) :
+    // une seule fabrique de producteurs pour les deux templates, sérialiseur choisi par type exact.
     // KafkaAvroSerializer lit schema.registry.url dans la configuration du producteur : la fabrique appelle configure()
     // sur le DelegatingByTypeSerializer, qui la transmet à chacun de ses délégués. Constaté par ErreursKafkaConfigTest
     // (propagation aux délégués) et par les tests d'intégration du DLT (la fabrique configure bien le sérialiseur).
@@ -64,7 +67,8 @@ public class ErreursKafkaConfig {
             DefaultKafkaProducerFactory<Object, Object> usineRejets = (DefaultKafkaProducerFactory<Object, Object>) usine;
             usineRejets.setValueSerializerSupplier(() -> new DelegatingByTypeSerializer(Map.of(
                     byte[].class, new ByteArraySerializer(),
-                    CotisationEmise.class, new KafkaAvroSerializer())));
+                    CotisationEmise.class, new KafkaAvroSerializer(),
+                    ResultatPrelevement.class, new KafkaAvroSerializer())));
         };
     }
 
@@ -78,7 +82,7 @@ public class ErreursKafkaConfig {
     // une PrelevementInvalideException est déterministe, la réessayer n'apporte rien (1 livraison aussi).
     @Bean
     CommonErrorHandler gestionnaireErreursConsommation(
-            KafkaTemplate<Object, Object> kafkaTemplate,
+            @Qualifier("kafkaTemplate") KafkaTemplate<Object, Object> kafkaTemplate,
             @Value("${prelevement.kafka.topic}") String topicSource,
             @Value("${kafka.error-handler.initial-interval}") long intervalleInitialMs,
             @Value("${kafka.error-handler.multiplier}") double multiplicateur,

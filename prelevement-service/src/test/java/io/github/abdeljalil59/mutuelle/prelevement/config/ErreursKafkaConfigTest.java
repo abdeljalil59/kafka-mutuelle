@@ -9,6 +9,9 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import io.github.abdeljalil59.mutuelle.events.ResultatPrelevement;
+import io.github.abdeljalil59.mutuelle.events.TypeResultat;
 import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import io.github.abdeljalil59.mutuelle.prelevement.AvroTestUtil;
 import io.github.abdeljalil59.mutuelle.prelevement.domain.PrelevementInvalideException;
@@ -103,6 +106,26 @@ class ErreursKafkaConfigTest {
         // Format Confluent : octet magique 0, puis l'identifiant du schéma, puis les données Avro.
         assertThat(octets[0]).isZero();
         assertThat(AvroTestUtil.decoder(TOPIC_REJETS, octets)).isEqualTo(evenement);
+    }
+
+    @Test
+    void serialise_un_resultat_de_prelevement_en_avro() {
+        ResultatPrelevement resultat = ResultatPrelevement.newBuilder()
+                .setIdEvenement(UUID.fromString("44444444-4444-4444-4444-444444444444"))
+                .setType(TypeResultat.REJETE)
+                .setIdAdherent("adh1")
+                .setMontant(new java.math.BigDecimal("150.00"))
+                .setDecideLe(Instant.parse("2026-11-20T09:00:00Z"))
+                .build();
+
+        byte[] octets = serialiseurDesRejets().serialize("prelevements.resultats", resultat);
+
+        // Format Confluent : octet magique 0, puis l'identifiant du schéma, puis les données Avro.
+        assertThat(octets[0]).isZero();
+        try (KafkaAvroDeserializer deserialiseur = new KafkaAvroDeserializer()) {
+            deserialiseur.configure(Map.of("schema.registry.url", AvroTestUtil.REGISTRE, "specific.avro.reader", true), false);
+            assertThat(deserialiseur.deserialize("prelevements.resultats", octets)).isEqualTo(resultat);
+        }
     }
 
     @Test

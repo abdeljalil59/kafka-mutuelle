@@ -40,7 +40,6 @@ import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.BatchListenerFailedException;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.listener.MessageListenerContainer;
@@ -189,30 +188,18 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
 
         assertThat(rejets).hasSize(1);
         // 1 livraison initiale + 4 réessais (ExponentialBackOffWithMaxRetries, kafka.error-handler.max-retries) avant
-        // l'envoi au DLT. Le message est seul dans son lot : un appel du port par livraison (un lot d'une décision n'est
-        // pas rejoué une par une). Le décompte est limité à cet idEvenement : l'espion est partagé par tous les tests
-        // de la classe. Deux mesures indépendantes : les appels du port, et les notifications du RetryListener.
+        // l'envoi au DLT : un appel du port par livraison. Le décompte est limité à cet idEvenement : l'espion est partagé
+        // par tous les tests de la classe. Deux mesures indépendantes : les appels du port, et les notifications du
+        // RetryListener.
         verify(journalDecisions, times(5)).enregistrer(argThat(decisions -> contient(decisions, ID_CINQ_LIVRAISONS)));
         assertThat(livraisons.livraisonsEchouees(cle)).as(livraisons.toString()).isEqualTo(5);
         assertThat(livraisons.envoisAuTopicDeRejets(cle)).as(livraisons.toString()).isEqualTo(1);
     }
 
+    // Les trois messages sont reçus au même poll (conteneur arrêté pendant l'envoi) : en mode record, chacun est traité
+    // séparément, seul le message en échec est réessayé puis envoyé au DLT, et ses voisins sont écrits normalement.
     @Test
-    void un_lot_de_messages_recus_au_meme_poll_est_ecrit_en_un_seul_appel() throws Exception {
-        String cle = "cle-lot";
-        List<UUID> ids = List.of(idLot(1), idLot(2), idLot(3), idLot(4), idLot(5));
-
-        // Messages envoyés pendant l'arrêt du conteneur : au redémarrage, un seul poll les ramène tous.
-        envoyerPendantArretDuConteneur(cle, ids.stream().map(id -> evenement(id, "adh-lot", "50.00")).toList());
-
-        attendreQueLeGroupeAitToutCommite();
-        ids.forEach(id -> assertThat(nombreDeLignes(id)).isEqualTo(1));
-        // Exactement un appel du port pour ces cinq décisions, dans l'ordre des messages.
-        verify(journalDecisions).enregistrer(argThat(decisions -> ids.equals(idsDe(decisions))));
-    }
-
-    @Test
-    void echec_au_milieu_d_un_lot_ecrit_les_voisins_et_envoie_seul_le_message_en_echec_au_dlt() throws Exception {
+    void echec_entre_deux_messages_valides_ecrit_les_voisins_et_envoie_seul_le_message_en_echec_au_dlt() throws Exception {
         String cle = "cle-lot-echec";
         UUID avant = idLot(11);
         UUID enEchec = idLot(12);
@@ -234,11 +221,10 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
         assertCauseDeLEchecDansLeRejet(rejets.get(0));
     }
 
-    // Listener batch : le recoverer reçoit l'exception enveloppée, la cause directe est BatchListenerFailedException
-    // (constaté) ; l'erreur Oracle d'origine reste lisible dans la trace conservée par le DLT.
+    // Listener par record : le recoverer reçoit un ListenerExecutionFailedException dont la cause directe est l'erreur
+    // Oracle d'origine, que l'en-tête du DLT porte directement.
     private static void assertCauseDeLEchecDansLeRejet(ConsumerRecord<String, byte[]> rejet) {
-        assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(BatchListenerFailedException.class.getName());
-        assertThat(texte(rejet, "kafka_dlt-exception-stacktrace")).contains("Caused by: " + CAUSE_ATTENDUE);
+        assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(CAUSE_ATTENDUE);
     }
 
     private void envoyer(String cle, CotisationEmise evenement) throws Exception {
@@ -246,8 +232,8 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
         MESSAGES_ENVOYES.incrementAndGet();
     }
 
-    // Le conteneur est arrêté pendant l'envoi puis redémarré : le premier poll qui suit reçoit tous les messages
-    // (même clé, donc même partition) et le listener batch les reçoit en une seule liste.
+    // Le conteneur est arrêté pendant l'envoi puis redémarré : le premier poll qui suit ramène tous les messages
+    // (même clé, donc même partition), que le listener traite ensuite un par un.
     private void envoyerPendantArretDuConteneur(String cle, List<CotisationEmise> evenements) throws Exception {
         registreDesListeners.getListenerContainers().forEach(MessageListenerContainer::stop);
         try {
@@ -263,12 +249,8 @@ class PersistanceIntegrationTest extends OracleIntegrationTest {
         return UUID.fromString(String.format("bbbbbbbb-0000-0000-0000-%012d", 100 + numero));
     }
 
-    private static List<UUID> idsDe(List<DecisionPrelevement> decisions) {
-        return decisions.stream().map(DecisionPrelevement::idEvenement).toList();
-    }
-
     private static boolean contient(List<DecisionPrelevement> decisions, UUID idEvenement) {
-        return idsDe(decisions).contains(idEvenement);
+        return decisions.stream().anyMatch(decision -> idEvenement.equals(decision.idEvenement()));
     }
 
     private static CotisationEmise evenement(UUID idEvenement, String idAdherent, String montant) {

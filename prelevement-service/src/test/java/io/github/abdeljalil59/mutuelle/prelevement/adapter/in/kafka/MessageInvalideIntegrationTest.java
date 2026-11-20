@@ -39,7 +39,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.listener.BatchListenerFailedException;
 import org.springframework.kafka.listener.CommonErrorHandler;
 import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.SendResult;
@@ -167,13 +166,11 @@ class MessageInvalideIntegrationTest extends OracleIntegrationTest {
         assertThat(rejets).hasSize(1);
         ConsumerRecord<String, byte[]> rejet = rejets.get(0);
         assertThat(AvroTestUtil.decoder(TOPIC_REJETS, rejet.value())).isEqualTo(montantNegatif);
-        // Listener batch : le recoverer reçoit l'exception enveloppée, la cause directe est BatchListenerFailedException
-        // (constaté) ; la cause d'origine reste lisible dans la trace conservée par le DLT.
-        assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(BatchListenerFailedException.class.getName());
-        assertThat(texte(rejet, "kafka_dlt-exception-stacktrace"))
-                .contains("Caused by: " + PrelevementInvalideException.class.getName());
-        // Non réessayable (addNotRetryableExceptions), y compris enveloppée dans BatchListenerFailedException : une seule
-        // livraison, puis l'envoi au topic de rejets. Ce point n'était pas vérifié en mode batch avant ce test.
+        // Listener par record : le recoverer reçoit un ListenerExecutionFailedException dont la cause directe est
+        // l'exception du domaine, que l'en-tête du DLT porte directement.
+        assertThat(texte(rejet, "kafka_dlt-exception-cause-fqcn")).isEqualTo(PrelevementInvalideException.class.getName());
+        // Non réessayable (addNotRetryableExceptions), y compris enveloppée dans ListenerExecutionFailedException : une
+        // seule livraison, puis l'envoi au topic de rejets.
         assertThat(livraisons.livraisonsEchouees(cle)).as(livraisons.toString()).isEqualTo(1);
         assertThat(livraisons.envoisAuTopicDeRejets(cle)).as(livraisons.toString()).isEqualTo(1);
     }

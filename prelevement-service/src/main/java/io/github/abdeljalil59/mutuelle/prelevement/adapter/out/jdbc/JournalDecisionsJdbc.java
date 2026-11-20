@@ -52,7 +52,8 @@ public class JournalDecisionsJdbc implements JournalDecisions {
     // Oracle 23.26.4 par JDBC seul, puis par JournalDecisionsJdbcTest à travers Spring). Une autre valeur (par exemple
     // SUCCESS_NO_INFO, -2, si le driver ne détaille pas) n'est pas comptée : mieux vaut ne rien compter que mal compter.
     // Limite : un lot qui échoue en cours de route ne renvoie aucun résultat, ses lignes déjà écrites ne sont pas
-    // comptées, et leur rejeu (une par une, voir TraiterDemandePrelevement) les compte comme doublons ignorés.
+    // comptées. Le listener n'appelle plus l'adaptateur qu'avec une décision à la fois (le lot d'un élément est
+    // écrit ou ne l'est pas) : la limite ne se présente plus qu'avec un lot de plusieurs décisions.
     private void compter(List<DecisionPrelevement> decisions, int[] resultats) {
         for (int index = 0; index < resultats.length; index++) {
             if (resultats[index] == 0) {

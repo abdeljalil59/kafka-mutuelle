@@ -55,6 +55,10 @@ prelevement:
   plafond: 100.00
   kafka:
     topic: cotisations.emises
+    # Résultat de chaque prélèvement (clé idAdherent), créé par le service au démarrage comme cotisations.emises.
+    resultats:
+      topic: prelevements.resultats
+      delai-publication-ms: 10000   # attente de la confirmation du broker, comme cotisation-service
     retry-demo:
       actif: false          # true : démarre le listener de démonstration @RetryableTopic
       topic: cotisations.retry-demo
