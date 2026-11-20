@@ -30,6 +30,7 @@
         <module>events-contract</module>
         <module>cotisation-service</module>
         <module>prelevement-service</module>
+        <module>impaye-service</module>
     </modules>
 
     <dependencyManagement>

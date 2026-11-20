@@ -1,0 +1,50 @@
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    properties:
+      # Schema Registry du compose (port hôte 8082), lu par le désérialiseur Avro.
+      schema.registry.url: http://localhost:8082
+    consumer:
+      group-id: impaye-service
+      # prelevements.resultats est écrit par un producteur TRANSACTIONNEL (prelevement-service) : read_committed ne
+      # rend que les résultats dont la transaction est validée, jamais ceux d'une transaction annulée.
+      isolation-level: read-committed
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # ErrorHandlingDeserializer autour du désérialiseur Avro : un message illisible est confié au gestionnaire
+      # d'erreurs au lieu de bloquer la partition.
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: io.confluent.kafka.serializers.KafkaAvroDeserializer
+        specific.avro.reader: true
+        # Le topic appartient à prelevement-service, qui le crée avec 3 partitions. Par défaut (true), un consommateur qui
+        # s'abonne à un topic absent le fait créer par le broker avec SA partition par défaut (doc kafka-clients) :
+        # ce service, démarré le premier, en ferait un topic à une partition.
+        allow.auto.create.topics: false
+    listener:
+      concurrency: 1
+  # Aucune datasource déclarée : avec H2 sur le classpath, Spring Boot crée une base EN MÉMOIRE (D9, première version :
+  # les impayés sont perdus à l'arrêt du service) et exécute schema.sql au démarrage (mode « embedded » par défaut).
+
+# Port web du service, uniquement pour Actuator (aucune API) : 8080 Kafka UI, 8081 cotisation-service, 8082 Schema
+# Registry, 8083 prelevement-service. Surchargeable par IMPAYE_SERVER_PORT.
+server:
+  port: ${IMPAYE_SERVER_PORT:8084}
+
+# Seul health est exposé par défaut en HTTP : metrics (consultation) et prometheus (scrape) sont ajoutés.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,prometheus
+
+# Réessais avant d'abandonner un message : 3 réessais espacés de 1 s, soit 4 livraisons. Pas de topic de rejets dans cette
+# première version (D9) : le message abandonné est journalisé en ERREUR puis ignoré, il n'est pas rejoué.
+kafka:
+  error-handler:
+    interval-ms: 1000
+    max-retries: 3
+
+impaye:
+  kafka:
+    topic: prelevements.resultats
