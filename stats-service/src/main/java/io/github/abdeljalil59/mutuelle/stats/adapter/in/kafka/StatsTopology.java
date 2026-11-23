@@ -12,7 +12,10 @@ import org.apache.kafka.streams.kstream.Grouped;
 import org.apache.kafka.streams.kstream.KTable;
 import org.apache.kafka.streams.kstream.Materialized;
 import org.apache.kafka.streams.kstream.Named;
+import org.apache.kafka.streams.kstream.Repartitioned;
 import org.apache.kafka.streams.state.KeyValueStore;
+
+import java.time.Duration;
 
 /**
  * Topology : prelevements.resultats (KStream) re-keyé par adhérent puis agrégé dans une KTable matérialisée par un
@@ -22,13 +25,15 @@ public class StatsTopology {
 
     private final String topic;
     private final String nomStore;
+    private final Duration retentionDeduplication;
     private final Serde<ResultatPrelevement> resultatSerde;
     private final Serde<StatsAdherent> statsSerde;
 
-    public StatsTopology(String topic, String nomStore, Serde<ResultatPrelevement> resultatSerde,
-                         Serde<StatsAdherent> statsSerde) {
+    public StatsTopology(String topic, String nomStore, Duration retentionDeduplication,
+                         Serde<ResultatPrelevement> resultatSerde, Serde<StatsAdherent> statsSerde) {
         this.topic = topic;
         this.nomStore = nomStore;
+        this.retentionDeduplication = retentionDeduplication;
         this.resultatSerde = resultatSerde;
         this.statsSerde = statsSerde;
     }
@@ -37,8 +42,14 @@ public class StatsTopology {
         return builder
                 .stream(topic, Consumed.with(Serdes.String(), resultatSerde))
                 // Re-keying : la clé devient idAdherent (déjà le cas sur le topic, mais Streams ne le sait pas) ;
-                // selectKey marque la clé comme modifiée, donc le groupBy suivant passe par un topic de repartitionnement.
+                // selectKey marque la clé comme modifiée : le repartitionnement est donc nécessaire.
                 .selectKey((cle, resultat) -> resultat.getIdAdherent())
+                // Repartitionnement explicite pour que la déduplication et l'agrégation soient dans la même tâche.
+                // Nommé comme l'ancien topic implicite (stats-service-stats-store-repartition).
+                .repartition(Repartitioned.<String, ResultatPrelevement>as(nomStore)
+                        .withKeySerde(Serdes.String())
+                        .withValueSerde(resultatSerde))
+                .processValues(new DeduplicationResultats(retentionDeduplication), Named.as("deduplication-resultats"))
                 .groupByKey(Grouped.with(Serdes.String(), resultatSerde))
                 .aggregate(
                         StatsAdherent::vide,

@@ -17,6 +17,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.kafka.config.StreamsBuilderFactoryBean;
 
+import java.time.Duration;
 import java.util.Map;
 
 @Configuration
@@ -32,8 +33,9 @@ public class StatsConfig {
 
     @Bean
     StatsTopology statsTopology(@Value("${stats.topic}") String topic, @Value("${stats.store}") String store,
+                                @Value("${stats.deduplication.retention}") Duration retentionDeduplication,
                                 Serde<ResultatPrelevement> resultatSerde) {
-        return new StatsTopology(topic, store, resultatSerde, new StatsAdherentSerde());
+        return new StatsTopology(topic, store, retentionDeduplication, resultatSerde, new StatsAdherentSerde());
     }
 
     /** Déclarer la KTable dans le StreamsBuilder suffit à enregistrer la topology avant le démarrage de Streams. */

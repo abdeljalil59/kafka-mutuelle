@@ -18,3 +18,7 @@ spring:
 stats:
   topic: prelevements.resultats
   store: stats-store
+  deduplication:
+    # Doit couvrir ce qu'un rejeu peut relire : prelevements.resultats est conservé 7 jours (retention.ms=604800000).
+    # Un événement rejoué après cette durée serait recompté.
+    retention: 7d

@@ -17,6 +17,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.Properties;
@@ -43,7 +44,7 @@ class StatsTopologyTest {
                 "mock://stats-" + UUID.randomUUID()), false);
 
         StreamsBuilder builder = new StreamsBuilder();
-        new StatsTopology(TOPIC, STORE, resultatSerde, new StatsAdherentSerde()).definir(builder);
+        new StatsTopology(TOPIC, STORE, Duration.ofDays(7), resultatSerde, new StatsAdherentSerde()).definir(builder);
         topology = builder.build();
 
         Properties props = new Properties();
