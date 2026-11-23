@@ -112,19 +112,30 @@ Observations faites à la main sur `stats-service` démarré sur l'hôte contre 
 - **Changelog** : 3 partitions, réplication 1, `cleanup.policy=compact`. Une ligne par mise à jour, avec l'agrégat complet : ADH-CONNECT-02 une fois, ADH-CONNECT-01 deux fois (2/1/235.0 puis 3/1/335.0), l'ancienne valeur n'étant pas encore compactée.
 - **Redémarrage** : après arrêt et relance, les logs montrent `Restored and ready to run` pour les tâches 1_0 et 1_2, puis `REBALANCING -> RUNNING`, et `GET /stats` renvoie des chiffres identiques à ceux d'avant l'arrêt.
 - **Pendant le démarrage** : une requête faite avant `RUNNING` n'a rien renvoyé ; une requête faite après `RUNNING` a renvoyé HTTP 200.
+- **Rejeu par remise à zéro des offsets** : service arrêté, puis `kafka-consumer-groups.sh --reset-offsets --to-earliest --execute` (groupe `stats-service`, topic `prelevements.resultats`), puis redémarrage. `GET /stats` renvoie ADH-CONNECT-01 = 6 acceptés, 2 rejetés, 670.0 et ADH-CONNECT-02 = 0 accepté, 2 rejetés, 400.0 (avant : 3/1/335.0 et 0/1/200.0). Les compteurs et les montants sont **doublés** ; `dernierEvenement` est inchangé (1795429828754 et 1795426655710).
+- **Outil `kafka-streams-application-reset.sh`** (`--bootstrap-server localhost:19092 --application-id stats-service --input-topics prelevements.resultats`) : il refuse de s'exécuter tant que le service tourne (`IllegalStateException` : le groupe `stats-service` est toujours actif). Service arrêté, le dry-run annonce la remise à 0 des offsets de `prelevements.resultats` sur les 3 partitions et la suppression des topics internes `stats-service-stats-store-repartition` et `stats-service-stats-store-changelog`. Après exécution, la liste des topics ne contient plus aucun topic « stats ».
+- **Dossier d'état local non supprimé par l'outil** : il est configuré dans `application.yml` (`state-dir: ${STATS_STATE_DIR:./target/state-stores}`), soit `stats-service/target/state-stores/stats-service`. Contenu observé : `0_0` à `0_2` vides ; `1_0` à `1_2` avec un dossier `rocksdb` et un `.checkpoint` ; un fichier `kafka-streams-process-metadata` daté du premier démarrage.
+- **Après suppression manuelle de ce dossier et redémarrage**, `GET /stats` renvoie 3/1/335.0 et 0/1/200.0.
 
 ### Déduit
 
 - Le topic `repartition` existe à cause du `selectKey` qui précède l'agrégation.
 - Les 4 messages initiaux n'ont produit que 2 lignes de changelog, probablement à cause du cache de Kafka Streams, qui fusionne les mises à jour d'une même clé avant le commit.
+- Une agrégation compteur/somme n'est pas idempotente : un rejeu additionne à nouveau. `dernierEvenement` est stable, ce qui suggère un maximum.
+- La sous-topologie 0 est sans état ; la sous-topologie 1 porte le state store (d'après les dossiers `0_x` vides et `1_x` avec `rocksdb`).
+- Les dossiers `rocksdb` datent du premier démarrage : la restauration constatée au redémarrage vient **probablement du disque local** et non du changelog.
+- L'identifiant du client Streams (même valeur dans les logs avant et après redémarrage) est probablement conservé dans `kafka-streams-process-metadata`.
+- La suppression manuelle du dossier d'état (dernière puce « Constaté ») a eu lieu **après** que l'outil de réinitialisation a supprimé le changelog et remis les offsets à 0 : l'état a donc été recalculé depuis le topic source, et non restauré depuis le changelog. Elle ne tranche pas l'origine de la restauration.
 
 ### Non vérifié
 
 - Si la restauration vient du dossier d'état local ou du changelog.
 - La cause exacte de l'absence de réponse pendant le démarrage (code HTTP non observé ; le contrôleur est censé répondre 503, non constaté).
 - Le rôle exact du cache (`commit.interval.ms`, taille du cache) dans la fusion des écritures.
+- Que le double comptage au rejeu se produirait aussi avec `exactly_once_v2`.
+- La valeur effective de `processing.guarantee` du service (non posée dans `application.yml` ; à lire dans la configuration résolue).
 
 ## 9. Non vérifié, à faire
 
-1. Restauration après redémarrage : **partiellement prouvé** : l'état est restauré, mais l'origine (disque local ou changelog) reste à vérifier.
-2. Prouver le double comptage au rejeu, puis tester `exactly_once_v2`.
+1. Origine de la restauration : **partiellement prouvé**. L'état est restauré, probablement depuis le disque local (déduit, §8 bis). Pour trancher : arrêter le service, supprimer `stats-service/target/state-stores/stats-service` **en gardant le changelog**, redémarrer et comparer `GET /stats`.
+2. Double comptage au rejeu : **constaté** (§8 bis). Reste à vérifier : la valeur effective de `processing.guarantee`, et si `exactly_once_v2` change le résultat.

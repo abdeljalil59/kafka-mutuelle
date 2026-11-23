@@ -105,7 +105,8 @@ Un connecteur **JDBC Sink** (`connect/jdbc-sink-resultats.json`) copie `prelevem
 - **Consommation** en `read_committed` (producteur amont transactionnel). Garantie **au moins une fois** : un résultat rejoué est compté deux fois (pas de dédoublonnage).
 - **Prouvé par des tests** : 25 tests sans broker (`TopologyTestDriver`, MockMvc).
 - **Vérifié à la main** (service démarré sur l'hôte contre le broker 4.4.0 et le registre ; relevés sans journal de commandes conservé) : démarrage réel, agrégation des messages déjà présents sur le topic, mise à jour en temps réel après une nouvelle cotisation, restauration du state store après redémarrage (chiffres identiques avant et après).
-- **Non vérifié** : si la restauration vient du dossier d'état local ou du changelog, le comportement au rejeu (double comptage éventuel) et `exactly_once_v2`.
+- **Constaté au rejeu** : remettre les offsets du groupe à zéro puis redémarrer **double** les compteurs et les montants (3 acceptés/1 rejeté/335.0 devient 6/2/670.0) : l'agrégation n'est pas dédoublonnée.
+- **Non vérifié** : si la restauration vient du dossier d'état local ou du changelog (probablement le disque local), si `exactly_once_v2` éviterait le double comptage, et la valeur effective de `processing.guarantee`.
 - Détail des observations : [kafka-streams.md](docs/kafka-streams.md), §8 bis.
 
 ## Prérequis
