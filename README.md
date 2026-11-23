@@ -78,7 +78,7 @@ Détails et mesures : [transactions-exactement-une-fois.md](docs/transactions-ex
 
 ## Kafka Connect : JDBC Sink sur `prelevements.resultats`
 
-Un connecteur **JDBC Sink** (`connect/jdbc-sink-resultats.json`) copie `prelevements.resultats` (Avro) dans PostgreSQL, sans code Java : `auto.create`, `upsert` sur la clé primaire `idEvenement` (idempotence). Services ajoutés à `infra/docker-compose.yml` : `postgres` (port 5433) et `kafka-connect` (`cp-kafka-connect:7.9.11`, API REST sur 8085). Aucun test ajouté : le total reste **218 tests**. **Configuration écrite et YAML validé, mais non démarrée** : démarrage, compatibilité avec le broker 4.4.0 et types SQL obtenus restent à constater. Guide : [kafka-connect.md](docs/kafka-connect.md).
+Un connecteur **JDBC Sink** (`connect/jdbc-sink-resultats.json`) copie `prelevements.resultats` (Avro) dans la table PostgreSQL `resultats_prelevements`, sans code Java : `upsert` sur la clé primaire `idEvenement` (idempotence attendue, rejeu non encore prouvé). La table est créée **à la main** par `connect/init-postgres.sql` (`auto.create=false`, voir les pièges ci-dessous), et `decideLe` y est un `BIGINT` (microsecondes). Services ajoutés à `infra/docker-compose.yml` : `postgres` (port 5433) et `kafka-connect` (`cp-kafka-connect:7.9.11`, API REST sur 8085). Aucun test ajouté : le total reste **218 tests** (pas de nouveau code Java). Constaté à la main : le connecteur tourne et 4 lignes ont été écrites. Pièges rencontrés (point dans le nom du topic, `timestamp-micros` en bigint, erreurs SQL masquées), commandes et limites : [kafka-connect.md](docs/kafka-connect.md).
 
 ## Prérequis
 
