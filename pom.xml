@@ -31,6 +31,7 @@
         <module>cotisation-service</module>
         <module>prelevement-service</module>
         <module>impaye-service</module>
+        <module>stats-service</module>
     </modules>
 
     <dependencyManagement>
@@ -43,6 +44,11 @@
             <dependency>
                 <groupId>io.confluent</groupId>
                 <artifactId>kafka-avro-serializer</artifactId>
+                <version>${confluent.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.confluent</groupId>
+                <artifactId>kafka-streams-avro-serde</artifactId>
                 <version>${confluent.version}</version>
             </dependency>
         </dependencies>

@@ -1,0 +1,20 @@
+server:
+  port: ${STATS_SERVER_PORT:8086}
+
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    streams:
+      application-id: stats-service
+      # Répertoire des State Stores (RocksDB). Le répertoire par défaut est dans le dossier temporaire du système.
+      state-dir: ${STATS_STATE_DIR:./target/state-stores}
+      properties:
+        # prelevements.resultats est écrit par un producteur TRANSACTIONNEL (prelevement-service) : sans read_committed,
+        # Streams agrégerait aussi les résultats d'une transaction annulée. Le préfixe « consumer. » cible le consommateur.
+        consumer.isolation.level: read_committed
+        # Schema Registry du compose (port hôte 8082), lu par le SpecificAvroSerde de la topology.
+        schema.registry.url: http://localhost:8082
+
+stats:
+  topic: prelevements.resultats
+  store: stats-store
