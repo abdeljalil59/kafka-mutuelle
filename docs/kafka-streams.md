@@ -2,7 +2,7 @@
 
 Objectif : agréger en temps réel les résultats de prélèvement **par adhérent** (nombre d'acceptés, de rejetés, montant total, dernier événement) et exposer le résultat par une API REST, sans base de données : l'état vit dans un **State Store** local, sauvegardé dans Kafka.
 
-> **Statut.** La logique d'agrégation est prouvée par 25 tests sans broker (`TopologyTestDriver`, registre Avro factice `mock://`). **Non vérifié** : le démarrage réel du service contre le broker 4.4.0 et le registre (câblage Spring de `@EnableKafkaStreams`, création des topics internes, requêtes REST sur un store alimenté). Voir §9.
+> **Statut.** La logique d'agrégation est prouvée par 25 tests sans broker (`TopologyTestDriver`, registre Avro factice `mock://`). Le démarrage réel contre le broker 4.4.0 et le registre a été **vérifié à la main** (topics internes créés, `GET /stats` sur un store alimenté, restauration après redémarrage) : voir §8 bis. **Non vérifié** : l'origine de la restauration (disque local ou changelog), le comportement exact des requêtes pendant le démarrage, le rôle du cache. Voir §9.
 
 ## 1. KStream et KTable
 
@@ -68,7 +68,7 @@ Exemple de corps : `{"nombreAcceptes":2,"nombreRejetes":1,"montantTotal":235.0,"
 - **Au moins une fois** (garantie par défaut de Streams, `processing.guarantee` non modifié) : après un crash, un message peut être retraité et **compté deux fois**. L'exactly-once (`exactly_once_v2`) corrigerait cela mais n'a pas été essayé ici.
 - **`read_committed`** (`consumer.isolation.level` dans `application.yml`) : `prelevement-service` publie dans une transaction Kafka ; sans ce réglage, un résultat d'une transaction annulée serait compté. Prouvé : `StreamsConfigTest` montre que Streams transmet le réglage au consommateur ; l'effet contre le vrai broker n'est pas constaté.
 - **Pas de dédoublonnage** par `idEvenement` : un résultat rejoué (par exemple `prelevement-service` qui republie après rejeu) est compté à nouveau. À comparer avec `impaye-service`, qui dédoublonne en base.
-- **Messages antérieurs au démarrage** : le service les agrège-t-il (`auto.offset.reset`) ? Le réglage n'est pas posé dans `application.yml` et la valeur par défaut de Streams n'a pas été vérifiée : à relever au premier démarrage. Changer l'`application-id` repart d'un état vide.
+- **Messages antérieurs au démarrage** (`auto.offset.reset`) : **constaté : les messages antérieurs ont bien été agrégés** (les 4 messages déjà présents sur `prelevements.resultats` au premier démarrage, voir §8 bis). Le réglage n'est pas posé dans `application.yml` et la valeur par défaut de Streams n'a pas été lue dans la documentation : seul le comportement est constaté. Changer l'`application-id` repart d'un état vide.
 
 ## 6. Architecture du module
 
@@ -100,9 +100,31 @@ La topology est classée en `adapter/in` : elle consomme un topic, comme un list
 
 Sous Windows, `TopologyTestDriver` journalise `Failed to change permissions for the directory ...\kafka-streams` : sans effet sur les résultats (changement de permissions POSIX impossible sur NTFS).
 
+## 8 bis. Constaté en live
+
+Observations faites à la main sur `stats-service` démarré sur l'hôte contre le compose (broker 4.4.0, registre sur 8082). Aucun journal de commandes n'a été conservé : ce sont des relevés, pas des preuves rejouables.
+
+### Constaté
+
+- **Premier démarrage** : `GET /stats` renvoie `{"ADH-CONNECT-01":{"nombreAcceptes":2,"nombreRejetes":1,"montantTotal":235.0,...},"ADH-CONNECT-02":{"nombreAcceptes":0,"nombreRejetes":1,"montantTotal":200.0,...}}`, soit les 4 messages déjà présents sur `prelevements.resultats`, lus depuis le début (earliest).
+- **Mise à jour en direct** : après un `POST /cotisations` (ADH-CONNECT-01, 100.00), `GET /stats/ADH-CONNECT-01` passe à `nombreAcceptes` 3 et `montantTotal` 335.0 en quelques secondes.
+- **Topics internes** : `kafka-topics --list` montre deux topics créés par Kafka Streams : `stats-service-stats-store-changelog` et `stats-service-stats-store-repartition`.
+- **Changelog** : 3 partitions, réplication 1, `cleanup.policy=compact`. Une ligne par mise à jour, avec l'agrégat complet : ADH-CONNECT-02 une fois, ADH-CONNECT-01 deux fois (2/1/235.0 puis 3/1/335.0), l'ancienne valeur n'étant pas encore compactée.
+- **Redémarrage** : après arrêt et relance, les logs montrent `Restored and ready to run` pour les tâches 1_0 et 1_2, puis `REBALANCING -> RUNNING`, et `GET /stats` renvoie des chiffres identiques à ceux d'avant l'arrêt.
+- **Pendant le démarrage** : une requête faite avant `RUNNING` n'a rien renvoyé ; une requête faite après `RUNNING` a renvoyé HTTP 200.
+
+### Déduit
+
+- Le topic `repartition` existe à cause du `selectKey` qui précède l'agrégation.
+- Les 4 messages initiaux n'ont produit que 2 lignes de changelog, probablement à cause du cache de Kafka Streams, qui fusionne les mises à jour d'une même clé avant le commit.
+
+### Non vérifié
+
+- Si la restauration vient du dossier d'état local ou du changelog.
+- La cause exacte de l'absence de réponse pendant le démarrage (code HTTP non observé ; le contrôleur est censé répondre 503, non constaté).
+- Le rôle exact du cache (`commit.interval.ms`, taille du cache) dans la fusion des écritures.
+
 ## 9. Non vérifié, à faire
 
-1. Démarrer `java -jar` / IDE contre le compose, vérifier que Streams passe en `RUNNING`, et noter les topics internes créés (`kafka-ui`).
-2. Produire des résultats (via `cotisation-service` et `prelevement-service`) et relever `GET /stats` et `GET /stats/{id}`.
-3. Arrêter puis relancer le service : l'état doit revenir du changelog (non prouvé).
-4. Prouver le double comptage au rejeu, puis tester `exactly_once_v2`.
+1. Restauration après redémarrage : **partiellement prouvé** : l'état est restauré, mais l'origine (disque local ou changelog) reste à vérifier.
+2. Prouver le double comptage au rejeu, puis tester `exactly_once_v2`.
