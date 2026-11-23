@@ -99,14 +99,14 @@ Un connecteur **JDBC Sink** (`connect/jdbc-sink-resultats.json`) copie `prelevem
 
 ## `stats-service` : Kafka Streams
 
-- **Topology** : `prelevements.resultats` lu en KStream (Avro), re-keyé par `idAdherent` (`selectKey`, donc topic de repartitionnement), agrégé (`groupByKey` puis `aggregate`) dans une KTable matérialisée par le State Store `stats-store` (RocksDB, sauvegardé dans un topic de changelog).
+- **Topology** : `prelevements.resultats` lu en KStream (Avro), re-keyé par `idAdherent` (`selectKey`, `repartition`), dédupliqué par `idEvenement` (`WindowStore`, rétention 7 jours configurable par `stats.deduplication.retention`), puis agrégé (`groupByKey` puis `aggregate`) dans une KTable matérialisée par le State Store `stats-store` (RocksDB, sauvegardé dans un topic de changelog).
 - **Agrégat `StatsAdherent`** (record immuable, JSON par un Serde Jackson écrit à la main) : `nombreAcceptes`, `nombreRejetes`, `montantTotal` (double, tous résultats), `dernierEvenement` (millisecondes).
 - **Interactive Queries** : `GET /stats/{idAdherent}` (200 ou 404) et `GET /stats` (tous), 503 tant que le store n'est pas prêt. **Mono-instance** : avec plusieurs instances, chacune ne verrait que ses partitions.
-- **Consommation** en `read_committed` (producteur amont transactionnel). Garantie **au moins une fois** : un résultat rejoué est compté deux fois (pas de dédoublonnage).
-- **Prouvé par des tests** : 25 tests sans broker (`TopologyTestDriver`, MockMvc).
+- **Consommation** en `read_committed` (producteur amont transactionnel). Garantie **au moins une fois** (`at_least_once`, constaté au démarrage). Un résultat rejoué n'est compté qu'une fois **dans la limite de la rétention de déduplication** (7 jours par défaut, comme la rétention du topic).
+- **Prouvé par des tests** : 30 tests sans broker (`TopologyTestDriver`, MockMvc), dont la déduplication (mêmes résultats rejoués, contenu identique, expiration après la rétention).
 - **Vérifié à la main** (service démarré sur l'hôte contre le broker 4.4.0 et le registre ; relevés sans journal de commandes conservé) : démarrage réel, agrégation des messages déjà présents sur le topic, mise à jour en temps réel après une nouvelle cotisation, restauration du state store après redémarrage (chiffres identiques avant et après).
-- **Constaté au rejeu** : remettre les offsets du groupe à zéro puis redémarrer **double** les compteurs et les montants (3 acceptés/1 rejeté/335.0 devient 6/2/670.0) : l'agrégation n'est pas dédoublonnée.
-- **Non vérifié** : si la restauration vient du dossier d'état local ou du changelog (probablement le disque local), si `exactly_once_v2` éviterait le double comptage, et la valeur effective de `processing.guarantee`.
+- **Constaté au rejeu** : avec la déduplication, remettre les offsets du groupe à zéro puis redémarrer laisse les chiffres inchangés (3 acceptés/1 rejeté/335.0 et 0/1/200.0). Avant la déduplication, le même geste donnait 6/2/670.0.
+- **Non vérifié** : si la restauration (agrégat et store de déduplication) vient du dossier d'état local ou du changelog, le cas hors rétention contre le broker réel (prouvé seulement par un test), le rôle exact du cache, et si `exactly_once_v2` changerait le résultat.
 - Détail des observations : [kafka-streams.md](docs/kafka-streams.md), §8 bis.
 
 ## Prérequis
@@ -118,7 +118,7 @@ Un connecteur **JDBC Sink** (`connect/jdbc-sink-resultats.json`) copie `prelevem
 
 ## Tests
 
-**243 tests** : `events-contract` 21, `cotisation-service` 55, `prelevement-service` 109, `impaye-service` 33, `stats-service` 25 (relevé au `mvn test -pl stats-service -am`, sans broker ni Docker). Provenance des 218 autres : `events-contract`, `cotisation-service` et `impaye-service` ont été relevés au `mvn -B verify -pl events-contract,cotisation-service,impaye-service` du 20/11/2026 (109 tests, de une à cinq minutes selon la charge, sans Oracle) ; les 109 de `prelevement-service` viennent du dernier build complet (leur code n'a pas changé depuis).
+**248 tests** : `events-contract` 21, `cotisation-service` 55, `prelevement-service` 109, `impaye-service` 33, `stats-service` 30 (relevé au `mvn test -pl stats-service -am`, sans broker ni Docker). Provenance des 218 autres : `events-contract`, `cotisation-service` et `impaye-service` ont été relevés au `mvn -B verify -pl events-contract,cotisation-service,impaye-service` du 20/11/2026 (109 tests, de une à cinq minutes selon la charge, sans Oracle) ; les 109 de `prelevement-service` viennent du dernier build complet (leur code n'a pas changé depuis).
 
 - Build complet : `mvn -B verify` (Docker et mémoire suffisante pour Oracle).
 - Sans Oracle : `mvn -B verify -pl events-contract,cotisation-service,impaye-service,stats-service`.
