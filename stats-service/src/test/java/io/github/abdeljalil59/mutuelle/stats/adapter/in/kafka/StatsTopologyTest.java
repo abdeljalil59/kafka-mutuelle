@@ -5,11 +5,13 @@ import io.confluent.kafka.streams.serdes.avro.SpecificAvroSerde;
 import io.github.abdeljalil59.mutuelle.events.ResultatPrelevement;
 import io.github.abdeljalil59.mutuelle.events.TypeResultat;
 import io.github.abdeljalil59.mutuelle.stats.domain.StatsAdherent;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.TestInputTopic;
+import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.junit.jupiter.api.AfterEach;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
@@ -129,6 +132,66 @@ class StatsTopologyTest {
         entree.pipeInput("ADH-1", resultat(idEvenement, "ADH-1", TypeResultat.ACCEPTE, "42.50", 1_000L));
 
         assertThat(store.get("ADH-1")).isEqualTo(new StatsAdherent(1, 0, 42.50, 1_000L));
+    }
+
+    @Test
+    void deuxIdEvenementDistinctsAuContenuIdentiqueSAdditionnent() {
+        entree.pipeInput("ADH-1", resultat(UUID.randomUUID(), "ADH-1", TypeResultat.ACCEPTE, "10.00", 1_000L));
+        entree.pipeInput("ADH-1", resultat(UUID.randomUUID(), "ADH-1", TypeResultat.ACCEPTE, "10.00", 1_000L));
+
+        assertThat(store.get("ADH-1")).isEqualTo(new StatsAdherent(2, 0, 20.0, 1_000L));
+    }
+
+    @Test
+    void rejouerUnLotEntierLaisseLesStatsInchangees() {
+        List<ResultatPrelevement> lot = List.of(
+                resultat(UUID.randomUUID(), "ADH-1", TypeResultat.ACCEPTE, "10.00", 1_000L),
+                resultat(UUID.randomUUID(), "ADH-1", TypeResultat.REJETE, "150.00", 2_000L),
+                resultat(UUID.randomUUID(), "ADH-2", TypeResultat.ACCEPTE, "42.50", 3_000L));
+        Instant horodatage = Instant.ofEpochMilli(5_000L);
+        lot.forEach(r -> entree.pipeInput(r.getIdAdherent(), r, horodatage));
+        assertThat(store.get("ADH-1")).isEqualTo(new StatsAdherent(1, 1, 160.0, 2_000L));
+        assertThat(store.get("ADH-2")).isEqualTo(new StatsAdherent(1, 0, 42.50, 3_000L));
+
+        lot.forEach(r -> entree.pipeInput(r.getIdAdherent(), r, horodatage)); // rejeu complet
+
+        assertThat(store.get("ADH-1")).isEqualTo(new StatsAdherent(1, 1, 160.0, 2_000L));
+        assertThat(store.get("ADH-2")).isEqualTo(new StatsAdherent(1, 0, 42.50, 3_000L));
+    }
+
+    @Test
+    void unIdEvenementRejoueApresLaRetentionEstRecompte() {
+        UUID rejoue = UUID.randomUUID();
+        Instant debut = Instant.ofEpochMilli(0);
+        entree.pipeInput("ADH-1", resultat(rejoue, "ADH-1", TypeResultat.ACCEPTE, "10.00", 1_000L), debut);
+
+        // 6 jours plus tard, sous la rétention de 7 jours : le doublon est ignoré
+        entree.pipeInput("ADH-1", resultat(rejoue, "ADH-1", TypeResultat.ACCEPTE, "10.00", 1_000L),
+                debut.plus(Duration.ofDays(6)));
+        assertThat(store.get("ADH-1").nombreAcceptes()).isEqualTo(1);
+
+        // un événement distinct à 8 jours fait passer le temps du flux au-delà de la rétention
+        entree.pipeInput("ADH-1", resultat(UUID.randomUUID(), "ADH-1", TypeResultat.ACCEPTE, "5.00", 2_000L),
+                debut.plus(Duration.ofDays(8)));
+
+        // le premier événement revient avec son horodatage d'origine : il n'est plus retrouvé, donc recompté
+        entree.pipeInput("ADH-1", resultat(rejoue, "ADH-1", TypeResultat.ACCEPTE, "10.00", 1_000L), debut);
+
+        assertThat(store.get("ADH-1")).isEqualTo(new StatsAdherent(3, 0, 25.0, 2_000L));
+    }
+
+    @Test
+    void unDoublonNAjouteAucuneLigneAuChangelogDeLAgregat() {
+        TestOutputTopic<String, StatsAdherent> changelog = driver.createOutputTopic(
+                "stats-test-stats-store-changelog", new StringDeserializer(), new StatsAdherentSerde().deserializer());
+        UUID idEvenement = UUID.randomUUID();
+
+        entree.pipeInput("ADH-1", resultat(idEvenement, "ADH-1", TypeResultat.ACCEPTE, "42.50", 1_000L));
+        assertThat(changelog.readKeyValuesToList()).hasSize(1); // témoin : un événement nouveau écrit une ligne
+
+        entree.pipeInput("ADH-1", resultat(idEvenement, "ADH-1", TypeResultat.ACCEPTE, "42.50", 1_000L));
+
+        assertThat(changelog.isEmpty()).isTrue();
     }
 
     private void envoyer(String idAdherent, TypeResultat type, String montant, long decideLeMillis) {
