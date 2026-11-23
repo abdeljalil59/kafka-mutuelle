@@ -122,14 +122,28 @@ class StatsTopologyTest {
         assertThat(topology.describe().toString()).contains(STORE);
     }
 
+    @Test
+    void unMemeIdEvenementRecuDeuxFoisNEstCompteQuUneFois() {
+        UUID idEvenement = UUID.randomUUID();
+        entree.pipeInput("ADH-1", resultat(idEvenement, "ADH-1", TypeResultat.ACCEPTE, "42.50", 1_000L));
+        entree.pipeInput("ADH-1", resultat(idEvenement, "ADH-1", TypeResultat.ACCEPTE, "42.50", 1_000L));
+
+        assertThat(store.get("ADH-1")).isEqualTo(new StatsAdherent(1, 0, 42.50, 1_000L));
+    }
+
     private void envoyer(String idAdherent, TypeResultat type, String montant, long decideLeMillis) {
         entree.pipeInput(idAdherent, resultat(idAdherent, type, montant, decideLeMillis));
     }
 
     private static ResultatPrelevement resultat(String idAdherent, TypeResultat type, String montant,
                                                 long decideLeMillis) {
+        return resultat(UUID.randomUUID(), idAdherent, type, montant, decideLeMillis);
+    }
+
+    private static ResultatPrelevement resultat(UUID idEvenement, String idAdherent, TypeResultat type,
+                                                String montant, long decideLeMillis) {
         return ResultatPrelevement.newBuilder()
-                .setIdEvenement(UUID.randomUUID())
+                .setIdEvenement(idEvenement)
                 .setType(type)
                 .setIdAdherent(idAdherent)
                 .setMontant(new BigDecimal(montant))
