@@ -83,6 +83,53 @@ services:
     depends_on:
       - prometheus
 
+  # Base cible du connecteur JDBC Sink (voir connect/ et docs/kafka-connect.md).
+  # Port 5433 sur l'hôte : 5432 peut être pris par une installation locale. Pas de volume : base de démonstration jetable.
+  postgres:
+    image: postgres:17-alpine
+    container_name: postgres
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: kafka_connect_sink
+      POSTGRES_USER: kafka
+      POSTGRES_PASSWORD: kafka
+
+  # Kafka Connect (mode distribué, un worker). Le plugin JDBC est installé au démarrage du conteneur : accès réseau requis.
+  # Le broker est joint sur le listener interne kafka:19092 (9092 n'est annoncé que comme localhost:9092, pour l'hôte).
+  # Replication factor 1 sur les trois topics internes (un seul broker, défaut : 3).
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect:7.9.11
+    container_name: kafka-connect
+    hostname: kafka-connect
+    ports:
+      - "8085:8083"      # API REST de Connect ; 8083 de l'hôte est pris par prelevement-service
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:19092
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: kafka-mutuelle-connect
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      # 8081 : port du conteneur (8082 n'est que le port publié sur l'hôte, injoignable depuis le réseau Docker)
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+    # Installation du plugin puis lancement normal du worker (commande d'origine de l'image).
+    command:
+      - bash
+      - -c
+      - confluent-hub install --no-prompt confluentinc/kafka-connect-jdbc:10.8.8 && /etc/confluent/docker/run
+    depends_on:
+      - kafka
+      - schema-registry
+      - postgres
+
 volumes:
   kafka-data:
     name: kafka-mutuelle-data

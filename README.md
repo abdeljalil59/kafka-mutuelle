@@ -49,6 +49,8 @@ Réalisé : les trois services. Pas encore réalisé : `kafka-lab` (dashboard li
 | **Prometheus** | **9090** |
 | **Grafana** | **3000** (dashboard « Kafka Mutuelle » ; `admin`/`admin`, lecture anonyme : usage local uniquement) |
 | Oracle Free 23ai local (utilisé par `prelevement-service`) | 1522 (service `freepdb1`, utilisateur `kafka_mutuelle`) |
+| **PostgreSQL 17** (cible du JDBC Sink, base `kafka_connect_sink`) | **5433** (5432 dans le conteneur) |
+| **Kafka Connect** (API REST) | **8085** (8083 dans le conteneur, car 8083 est pris par `prelevement-service`) |
 
 Démarrer l'infrastructure : `docker compose -f infra/docker-compose.yml up -d` (démarre aussi Prometheus et Grafana). Les trois services tournent sur l'hôte (`java -jar` ou IDE), pas dans le compose, et il n'existe aucun Dockerfile : leurs cibles Prometheus sont `down` tant qu'ils sont arrêtés. Prometheus ne relit pas `prometheus/prometheus.yml` tout seul : après l'ajout d'une cible, redémarrer son conteneur. Ne jamais utiliser `down -v` : il supprime le volume `kafka-mutuelle-data` et toutes les données.
 
@@ -73,6 +75,10 @@ Détails et mesures : [transactions-exactement-une-fois.md](docs/transactions-ex
 - **Reprise d'une publication ratée** : si la publication échoue, rien n'est marqué ; l'exception remonte, le message est réessayé et, s'il est abandonné, le rejet suivant de l'adhérent émet la relance (décompte et montant de ce rejet-là). Une relance n'est donc **pas perdue**. **Limite assumée** : si le marquage échoue après une publication réussie, le réessai republie : une relance **en double** est possible, donc le consommateur de `impayes.relances` doit être idempotent (sur `idAdherent`). Le service est mono-instance : sa base H2 est propre au processus.
 - **Topic d'entrée non créé par ce service** (`allow.auto.create.topics=false`) : il appartient à `prelevement-service`. Démarré avant lui, `impaye-service` attend le topic au lieu de le faire créer à une seule partition.
 - **Tests** : sans Oracle ni Docker (broker embarqué, registre factice `mock://`, H2). Le `read_committed` est prouvé avec un producteur transactionnel de test, et un témoin négatif (consommateur forcé en `read_uncommitted`) fait échouer le test d'abort.
+
+## Kafka Connect : JDBC Sink sur `prelevements.resultats`
+
+Un connecteur **JDBC Sink** (`connect/jdbc-sink-resultats.json`) copie `prelevements.resultats` (Avro) dans PostgreSQL, sans code Java : `auto.create`, `upsert` sur la clé primaire `idEvenement` (idempotence). Services ajoutés à `infra/docker-compose.yml` : `postgres` (port 5433) et `kafka-connect` (`cp-kafka-connect:7.9.11`, API REST sur 8085). Aucun test ajouté : le total reste **218 tests**. **Configuration écrite et YAML validé, mais non démarrée** : démarrage, compatibilité avec le broker 4.4.0 et types SQL obtenus restent à constater. Guide : [kafka-connect.md](docs/kafka-connect.md).
 
 ## Prérequis
 
