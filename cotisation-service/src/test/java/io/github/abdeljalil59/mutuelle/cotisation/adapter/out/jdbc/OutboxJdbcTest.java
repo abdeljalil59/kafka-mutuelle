@@ -82,6 +82,20 @@ class OutboxJdbcTest extends OracleIntegrationTest {
         return date == null ? null : date.toInstant();
     }
 
+    // Structure, pas performance : l'ordre des colonnes de l'index est le contrat dont dépend la lecture du relais
+    // (WHERE envoye_le IS NULL ORDER BY cree_le, id_evenement). Le plan d'exécution n'est pas asserté (trop fragile).
+    @Test
+    void l_index_de_lecture_porte_les_colonnes_dans_l_ordre_du_relais() {
+        List<String> colonnes = jdbcClient
+                .sql("SELECT column_position || ':' || column_name FROM user_ind_columns "
+                        + "WHERE index_name = 'IDX_OUTBOX_A_ENVOYER' AND table_name = 'OUTBOX' "
+                        + "ORDER BY column_position")
+                .query(String.class)
+                .list();
+
+        assertThat(colonnes).containsExactly("1:ENVOYE_LE", "2:CREE_LE", "3:ID_EVENEMENT");
+    }
+
     @Test
     void enregistre_les_colonnes_attendues() {
         Instant emiseLe = Instant.parse("2026-11-16T10:00:00.123Z");
