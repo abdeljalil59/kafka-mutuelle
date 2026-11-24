@@ -6,6 +6,7 @@ import static java.util.stream.Collectors.toSet;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
+import io.github.abdeljalil59.mutuelle.cotisation.OracleIntegrationTest;
 import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.PublicationCotisation;
 import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import java.math.BigDecimal;
@@ -47,7 +48,7 @@ import org.springframework.test.annotation.DirtiesContext;
         "mutuelle.cotisation.outbox.relais-actif=false"})
 @EmbeddedKafka
 @DirtiesContext
-class PublicationCotisationKafkaIntegrationTest {
+class PublicationCotisationKafkaIntegrationTest extends OracleIntegrationTest {
 
     static final String REGISTRE = "mock://cotisation-publication";
     private static final Logger LOGGER =

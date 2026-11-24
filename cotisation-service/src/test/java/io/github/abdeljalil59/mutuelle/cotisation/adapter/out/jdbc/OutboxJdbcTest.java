@@ -50,7 +50,7 @@ class OutboxJdbcTest extends OracleIntegrationTest {
     @BeforeAll
     static void cree_le_schema() {
         DataSource base = new DriverManagerDataSource(ORACLE.getJdbcUrl(), ORACLE.getUsername(), ORACLE.getPassword());
-        new ResourceDatabasePopulator(new ClassPathResource("schema-oracle.sql")).execute(base);
+        new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(base);
         jdbcClient = JdbcClient.create(base);
     }
 

@@ -18,6 +18,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,7 +32,7 @@ import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.test.annotation.DirtiesContext;
 
 // Flux complet avec le VRAI relais planifié (@Scheduled, toutes les 200 ms), sans aucun espion :
-// cas d'usage -> table outbox (H2 en mémoire, JSON) -> relais -> conversion Avro -> Kafka embarqué -> consommateur
+// cas d'usage -> table outbox (Oracle, JSON) -> relais -> conversion Avro -> Kafka embarqué -> consommateur
 // de test. Les scénarios qui stubbent l'outbox sont dans OutboxTransactionIntegrationTest (relais coupé),
 // car un stub posé pendant que le relais interroge le même espion serait une course.
 // Registre de schémas factice (mock://) partagé entre le service et le consommateur de test.
@@ -46,7 +47,7 @@ import org.springframework.test.annotation.DirtiesContext;
 @AutoConfigureMetrics
 @EmbeddedKafka
 @DirtiesContext
-class OutboxIntegrationTest {
+class OutboxIntegrationTest extends OracleIntegrationTest {
 
     static final String REGISTRE = "mock://cotisation-outbox";
     private static final Logger LOGGER = LoggerFactory.getLogger(OutboxIntegrationTest.class);
@@ -63,6 +64,13 @@ class OutboxIntegrationTest {
 
     @Value("${local.server.port}")
     private int portWeb;
+
+    // La base Oracle est partagée entre les classes de test (même conteneur) : les lignes laissées par une autre classe
+    // seraient publiées par le vrai relais. On repart d'une outbox vide.
+    @BeforeEach
+    void vide_l_outbox() {
+        jdbcClient.sql("DELETE FROM outbox").update();
+    }
 
     @Test
     void flux_complet_de_la_cotisation_au_message_avro_sur_le_topic() {

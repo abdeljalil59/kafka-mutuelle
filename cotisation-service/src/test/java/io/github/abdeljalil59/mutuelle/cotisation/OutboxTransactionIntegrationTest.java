@@ -42,7 +42,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
         "mutuelle.cotisation.outbox.relais-actif=false"})
 @EmbeddedKafka
 @DirtiesContext
-class OutboxTransactionIntegrationTest {
+class OutboxTransactionIntegrationTest extends OracleIntegrationTest {
 
     static final String REGISTRE = "mock://cotisation-transaction";
     private static final Logger LOGGER = LoggerFactory.getLogger(OutboxTransactionIntegrationTest.class);
