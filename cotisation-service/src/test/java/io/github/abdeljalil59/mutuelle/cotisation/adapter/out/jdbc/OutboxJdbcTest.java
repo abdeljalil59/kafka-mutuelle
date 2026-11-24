@@ -3,6 +3,7 @@ package io.github.abdeljalil59.mutuelle.cotisation.adapter.out.jdbc;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
 
+import io.github.abdeljalil59.mutuelle.cotisation.OracleIntegrationTest;
 import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.EvenementOutbox;
 import io.github.abdeljalil59.mutuelle.cotisation.domain.Cotisation;
 import java.math.BigDecimal;
@@ -10,23 +11,24 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
-import org.junit.jupiter.api.AfterEach;
+import javax.sql.DataSource;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
-import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
+import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-// Vrai adaptateur contre une vraie base H2 en mémoire, créée avec le schema.sql de production.
+// Vrai adaptateur contre un vrai Oracle Free (conteneur partagé), créé avec le schéma Oracle de production.
 // Le JsonMapper est un mapper Jackson 3 "nu" : le format du JsonMapper du contexte Spring
 // (celui de la production) est constaté par OutboxIntegrationTest.
-class OutboxJdbcTest {
+class OutboxJdbcTest extends OracleIntegrationTest {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(OutboxJdbcTest.class);
     private static final String TOPIC = "cotisations.emises";
@@ -42,24 +44,21 @@ class OutboxJdbcTest {
                          Instant creeLe, Instant envoyeLe) {
     }
 
-    private EmbeddedDatabase base;
-    private JdbcClient jdbcClient;
+    private static JdbcClient jdbcClient;
     private OutboxJdbc outbox;
 
-    @BeforeEach
-    void cree_la_base() {
-        base = new EmbeddedDatabaseBuilder()
-                .setType(EmbeddedDatabaseType.H2)
-                .generateUniqueName(true)
-                .addScript("schema.sql")
-                .build();
+    @BeforeAll
+    static void cree_le_schema() {
+        DataSource base = new DriverManagerDataSource(ORACLE.getJdbcUrl(), ORACLE.getUsername(), ORACLE.getPassword());
+        new ResourceDatabasePopulator(new ClassPathResource("schema-oracle.sql")).execute(base);
         jdbcClient = JdbcClient.create(base);
-        outbox = new OutboxJdbc(jdbcClient, JSON, TOPIC);
     }
 
-    @AfterEach
-    void ferme_la_base() {
-        base.shutdown();
+    @BeforeEach
+    void repart_d_une_table_vide() {
+        // La base est partagée entre les tests de la classe (même conteneur) : on repart d'une table vide.
+        jdbcClient.sql("DELETE FROM outbox").update();
+        outbox = new OutboxJdbc(jdbcClient, JSON, TOPIC);
     }
 
     private static Cotisation cotisation(String idAdherent, String montant, Instant emiseLe) {
