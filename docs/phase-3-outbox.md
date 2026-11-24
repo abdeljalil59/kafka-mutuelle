@@ -1,6 +1,8 @@
 # Phase 3 : outbox transactionnel et relais (`cotisation-service`)
 
-Environnement (18/11/2026, heure locale +01:00) : Spring Boot 4.1.2, spring-kafka 4.1.2, kafka-clients 4.2.2, H2 2.4.240 (versions : voir [versions.md](versions.md)). Producteur avant l'outbox : [phase-1-producteur.md](phase-1-producteur.md). Consommateur idempotent : [phase-3-idempotence.md](phase-3-idempotence.md).
+> **Mise à jour du 24/11/2026.** L'outbox de `cotisation-service` est passé de H2 à Oracle Free 23ai (`schema.sql`, variables `COTISATION_DB_URL`, `COTISATION_DB_USER`, `COTISATION_DB_PASSWORD`). **L'outbox est le seul état du service** : il n'a pas de table `cotisation`, la transaction ne porte qu'un `INSERT`. Ce journal décrit l'état du 18/11/2026 (H2) ; les sections 3, 4, 7, 8 et 9 sont mises à jour, la section 10 reste le relevé daté du 18/11 sur H2, la section 11 consigne la migration vers Oracle et la section 12 l'index de lecture du relais.
+
+Environnement (18/11/2026, heure locale +01:00) : Spring Boot 4.1.2, spring-kafka 4.1.2, kafka-clients 4.2.2, H2 2.4.240 (versions : voir [versions.md](versions.md)). Producteur avant l'outbox : [phase-1-producteur.md](phase-1-producteur.md). Consommateur idempotent : [phase-3-idempotence.md](phase-3-idempotence.md). Environnement de la migration Oracle (24/11/2026) : section 11.
 
 Pour chaque point : ce qui est **constaté** (sortie réelle ou source lue), **déduit** et **non vérifié**.
 
@@ -8,7 +10,7 @@ Pour chaque point : ce qui est **constaté** (sortie réelle ou source lue), **d
 - Sortir Kafka du chemin HTTP : le `POST` répond 201 quand l'événement est **écrit en base** (table `outbox`), pas quand il est publié. Un relais planifié publie ensuite, avec une livraison **au moins une fois**.
 - Garantie visée : écrire l'état métier et l'événement dans **une seule transaction**. **Limite actuelle** : le service n'a pas de table `cotisation` (option A, outbox seule) ; la transaction ne porte qu'un `INSERT` et l'atomicité conjointe n'est pas démontrable ici (section 8).
 - **Commits** : `0e3f18c` (`refactor`, `idEvenement` généré dans le cas d'usage), `50eaf5c` (`feat`), `bbbab13` (`test`), puis ce journal.
-- **Phase** : l'outbox est traité ici en phase 3 (apprentissage, H2). La phase 6 « Outbox Oracle » du brief et du README reste celle de la migration Oracle.
+- **Phase** : l'outbox est traité ici en phase 3 (apprentissage, sur H2) ; il a été migré sur Oracle le 24/11/2026 (phase 6 du brief, section 11).
 
 ## 2. Problème résolu
 - **Avant** : le `POST` publiait lui-même (`send(...).get(délai)`). Constaté ([phase-1-producteur.md](phase-1-producteur.md), section 7) : broker arrêté, 503 après 5,07 s et 5,02 s ; le 503 est **ambigu** : après un délai dépassé le message a pu être écrit, et un client qui rejoue crée un doublon.
@@ -18,22 +20,26 @@ Pour chaque point : ce qui est **constaté** (sortie réelle ou source lue), **d
 ## 3. Modèle
 ```sql
 CREATE TABLE IF NOT EXISTS outbox (
-    id_evenement VARCHAR(36) PRIMARY KEY,
-    topic VARCHAR(100) NOT NULL,
-    cle VARCHAR(100) NOT NULL,
-    payload CLOB NOT NULL,
-    cree_le TIMESTAMP WITH TIME ZONE NOT NULL,
-    envoye_le TIMESTAMP WITH TIME ZONE
+    id_evenement VARCHAR2(36 CHAR)  NOT NULL,
+    topic        VARCHAR2(100 CHAR) NOT NULL,
+    cle          VARCHAR2(100 CHAR) NOT NULL,
+    payload      CLOB               NOT NULL,
+    cree_le      TIMESTAMP WITH LOCAL TIME ZONE NOT NULL,
+    envoye_le    TIMESTAMP WITH LOCAL TIME ZONE,
+    CONSTRAINT pk_outbox PRIMARY KEY (id_evenement)
 );
+
+CREATE INDEX IF NOT EXISTS idx_outbox_a_envoyer ON outbox (envoye_le, cree_le, id_evenement);
 ```
+- DDL H2 du 18/11/2026, remplacé : `VARCHAR(36) PRIMARY KEY`, dates en `TIMESTAMP WITH TIME ZONE`, pas d'index. Raison du type des dates : section 12.
 - **`EvenementOutbox(UUID idEvenement, String topic, String cle, String payload)`** : ce que le relais lit. `payload` est le JSON **déjà sérialisé** ; le relais ne connaît pas le contrat.
 - `cree_le` = `emiseLe` de la cotisation (pas l'instant de l'`INSERT`) ; `envoye_le` reste `NULL` tant que l'événement n'est pas publié ; `cle` = `idAdherent`.
-- **Constaté** : `cree_le` et `envoye_le` sont relus à l'identique, millisecondes comprises (`OutboxJdbcTest`).
+- **Constaté** : `cree_le` et `envoye_le` sont relus à l'identique, millisecondes comprises (`OutboxJdbcTest`, sur H2 le 18/11, sur Oracle le 24/11/2026).
 
 ## 4. Technique
 - **`@Transactional`** sur `EmettreCotisation.emettre` : l'`INSERT` unique (`JdbcClient`) participe à la transaction du `DataSourceTransactionManager` de Boot. **Constaté** : transaction active pendant `enregistrer` via le cas d'usage, inactive en appel direct (section 7).
 - **Relais** : `@Scheduled(fixedDelayString = "${mutuelle.cotisation.outbox.delai-relais-ms}")`, 10 000 ms, lot de 50. Source : Javadoc de `@Scheduled` (« a fixed period between the end of the last invocation and the start of the next »), page lue en **7.1.0** alors que le projet résout la 7.0.10.
-- **Lecture** : `WHERE envoye_le IS NULL ORDER BY cree_le, id_evenement FETCH FIRST ? ROWS ONLY`. Pas de `SKIP LOCKED`, pas de purge (décisions de l'étude).
+- **Lecture** : `WHERE envoye_le IS NULL ORDER BY cree_le, id_evenement FETCH FIRST ? ROWS ONLY`. Pas de `SKIP LOCKED`, pas de purge (décisions de l'étude) ; index de lecture : section 12.
 - **Producteur** : `KafkaTemplate<String, String>` avec `StringSerializer` ; le payload n'est pas resérialisé (**constaté** : égalité exacte avec la valeur lue sur le topic).
 
 ## 5. Architecture
@@ -48,21 +54,24 @@ CREATE TABLE IF NOT EXISTS outbox (
 - **Au moins une fois** : le marquage vient après l'accusé. Si le marquage échoue, l'événement reste « non envoyé » et est republié au passage suivant. **Constaté** (échec de marquage simulé) : 2 messages pour la clé, même partition (2), offsets 0 et 1, même `idEvenement`, même payload.
 - **Lien avec le consommateur** : `prelevement-service` déduplique sur `idEvenement` (clé primaire). Il lit un JSON sans en-tête de type (`spring.json.use.type.headers: false`, type par défaut `CotisationEmise`, **constaté** dans son `application.yml`). La lecture du payload de l'outbox par ce consommateur n'est **pas testée** de bout en bout par un test automatisé ; elle est **relevée** une fois en démonstration 3 (section 10).
 
-## 7. Tests (`mvn -B test -pl cotisation-service -am`, 18/11 : `BUILD SUCCESS`, 39 tests, 11 pour `events-contract`)
+## 7. Tests (`mvn -B test -pl cotisation-service -am`, 18/11 : `BUILD SUCCESS`, 39 tests, 11 pour `events-contract` ; 24/11/2026 : `BUILD SUCCESS`, 56 tests pour `cotisation-service`, 21 pour `events-contract`)
 | Classe | Tests | Constate |
 |---|---|---|
-| `OutboxJdbcTest` | 7 | H2 mémoire, `schema.sql` de production : colonnes écrites ; format du payload (`montant` 50.00, `emiseLe` ISO) ; tri par `cree_le` puis `id_evenement` ; limite `FETCH FIRST ? ROWS ONLY` ; marquage ; `DuplicateKeyException` sur la clé primaire |
+| `OutboxJdbcTest` | 8 (lancement 7) | Oracle Free dans un conteneur (`OracleIntegrationTest`), `schema.sql` de production : colonnes écrites ; format du payload (`montant` 50.00, `emiseLe` ISO) ; tri par `cree_le` puis `id_evenement` ; limite `FETCH FIRST ? ROWS ONLY` ; marquage ; `DuplicateKeyException` sur la clé primaire ; structure de l'index (colonnes et positions 1 à 3 via `USER_IND_COLUMNS`). Au 18/11 : 7 tests sur H2 mémoire |
 | `RelayerOutboxTest` | 3 | Mockito sur les deux ports : publication puis marquage dans l'ordre ; arrêt du lot au premier échec ; 0 sans rien à relayer |
-| `OutboxIntegrationTest` | 1 | Relais **planifié** réel (200 ms), `@EmbeddedKafka`, sans espion : cas d'usage, base, relais, topic ; `idEvenement` de la ligne ; format du `JsonMapper` du contexte |
-| `OutboxTransactionIntegrationTest` | 2 | Relais coupé, `relayer()` appelé par le test : transaction active `[true, false]` ; doublon par échec de marquage |
+| `OutboxIntegrationTest` | 2 (lancement 7) | Relais **planifié** réel (200 ms), `@EmbeddedKafka`, sans espion : cas d'usage, base, relais, topic ; `idEvenement` de la ligne ; format du `JsonMapper` du contexte ; export Prometheus (`/actuator/prometheus`). Sur Oracle, un `@BeforeEach` vide `outbox` (déduit, non testé sans lui : sans lui, le vrai relais publierait les lignes laissées par une autre classe sur le même conteneur) |
+| `OutboxTransactionIntegrationTest` | 2 | Sur Oracle. Relais coupé, `relayer()` appelé par le test : transaction active `[true, false]` ; doublon par échec de marquage |
 | `EmettreCotisationTest`, `PublicationCotisationKafka*Test` | 2, 10 | Adaptés au commit 2 (payload tel quel, sans en-tête de type) |
 - **Choix (déduit, non expérimenté)** : deux classes d'intégration, car un stub posé sur l'espion `Outbox` pendant que le relais planifié l'appelle serait une course.
+- **Correction du chiffre du 18/11** : « 1 » pour `OutboxIntegrationTest` était périmé depuis le 19/11/2026, date du commit qui a ajouté le test d'export Prometheus (`d672866`, constaté par `git log -S`) ; ce n'est pas un effet de la migration.
+- **Les trois `@SpringBootTest`** héritent d'`OracleIntegrationTest` : un conteneur Oracle par JVM de test, `@DynamicPropertySource` pour l'URL, l'utilisateur et le mot de passe ; un contexte Spring par classe (`@DirtiesContext`).
+- **Détail au 24/11/2026 (lancement 7)** : `CotisationTest` 18, `OutboxJdbcTest` 8, `CotisationControllerTest` 4, `ConvertisseurAvroTest` 6, `PublicationCotisationKafkaTest` 6, `PublicationCotisationKafkaIntegrationTest` 3, `PublicationCotisationKafkaSansBrokerTest` 2, `RelayerOutboxTest` 3, `EmettreCotisationTest` 2, `OutboxIntegrationTest` 2, `OutboxTransactionIntegrationTest` 2, soit 56. Les autres chiffres du tableau sont ceux du 18/11.
 
 ## 8. Ce qui est constaté, déduit, non vérifié
 | | Constaté | Déduit | Non vérifié |
 |---|---|---|---|
-| SQL / JDBC | `FETCH FIRST ? ROWS ONLY` avec paramètre (limites 1, 2, 10) ; tri ; `Instant` aller-retour exact | | Mêmes requêtes sous Oracle |
-| Clé primaire | `DuplicateKeyException`, ligne d'origine intacte | | Oracle |
+| SQL / JDBC | `FETCH FIRST ? ROWS ONLY` avec paramètre (limites 1, 2, 10) ; tri ; `Instant` aller-retour exact (H2, 18/11) ; mêmes requêtes sous Oracle Free 23.26.4 avec `OffsetDateTime` UTC (`OutboxJdbcTest`, 24/11/2026) | | |
+| Clé primaire | `DuplicateKeyException`, ligne d'origine intacte (H2 le 18/11, Oracle le 24/11/2026) | | |
 | Format JSON | 4 propriétés ; `montant` à 50.00 ; `emiseLe` en chaîne ISO-8601 ; identique avec un `JsonMapper` nu et avec celui de Spring | | Autres réglages des deux mappers ; lecture par `prelevement-service` dans un test automatisé (relevée en démonstration 3, section 10) |
 | Transaction | Active via le cas d'usage, inactive en appel direct ; 2 lignes validées | | Rollback conjoint avec une table métier (inexistante) |
 | Relais | Le relais planifié publie puis marque ; arrêt du lot au premier échec | Latence max = `delai-relais-ms` + temps du lot | Relais sous charge ; `catch` de `RelaiOutbox` |
@@ -70,18 +79,18 @@ CREATE TABLE IF NOT EXISTS outbox (
 | Multi-instance | | Deux instances publieraient les mêmes lignes | `FOR UPDATE SKIP LOCKED` |
 | Purge | | La table grossit | Purge des lignes envoyées |
 | Broker | Preuves automatisées sur le broker embarqué 4.2.2 ; publication vers le broker 4.4.0 du compose relevée en démonstrations 2 et 3 (section 10) | | Broker réellement arrêté (la démonstration 2 vise un port fictif) |
-| Oracle | | | Tout comportement Oracle |
+| Oracle | Conteneur 23.26.4 : `OutboxJdbcTest`, flux complet, transaction, doublon par échec de marquage (lancement 7, 56 tests verts) | | Oracle local 23.4.0.24.05 : aucun test ; démonstration en direct ; `ORA-02014` sur 23.26.4 (section 11) |
 
 ## 9. Notes et limites
 - **Latence** : un événement est publié au passage suivant, soit jusqu'à 10 s plus le temps de publier le lot. **Une seule instance**, pas de purge.
-- **Base en mémoire par défaut** (aucune propriété `datasource` dans `application.yml`, **constaté**) : les lignes non envoyées disparaissent au redémarrage. L'outbox n'est durable qu'avec une base fichier ou Oracle (phase 6).
+- **Base Oracle** (`spring.datasource.*` de `application.yml`, variables `COTISATION_DB_*`) : la table survit au redémarrage. Au 18/11/2026, la base était H2 en mémoire par défaut (aucune propriété `datasource` dans `application.yml`, constaté alors) et les lignes non envoyées disparaissaient au redémarrage.
 - **`cle` limitée à 100 caractères** : un `idAdherent` plus long fait échouer l'`INSERT` ; **déduit** : 500, `GestionErreursRest` ne traite pas les erreurs de base (non testé ici).
 - **Gestionnaire 503** : plus atteint depuis le cas d'usage (il ne publie plus) ; conservé et testé avec un mock.
 - **Ordre par clé** : celui de `cree_le` (horloge du service). Deux transactions concurrentes du même adhérent pourraient être validées dans l'ordre inverse (déduit, non exercé).
 - **Démonstrations** : les trois démonstrations prévues (relais coupé, broker injoignable, doublon par replay) ont été exécutées par l'utilisateur le 18/11/2026 ; relevés et commandes à la section 10.
 
 ## 10. Démonstrations live
-Exécutées par l'utilisateur le 18/11/2026 (heure locale +01:00) : jar de `cotisation-service` construit depuis le dépôt (code de production inchangé depuis `50eaf5c`), base H2 **fichier** `cotisation-service/target/demo-outbox` (`AUTO_SERVER=TRUE`), broker `apache/kafka:4.4.0` du compose. **Tout ce qui suit est un relevé de l'utilisateur** : je n'ai pas rejoué les services, et les sorties brutes (logs, `curl`, console) ne sont pas reproduites ici. Les commandes de la dernière sous-section sont reconstituées à partir du plan (section 9) et du relevé, et n'ont pas été rejouées non plus.
+**Démonstrations du 18/11/2026 sur une base H2 fichier ; relevés conservés tels quels.** Exécutées par l'utilisateur le 18/11/2026 (heure locale +01:00) : jar de `cotisation-service` construit depuis le dépôt (code de production inchangé depuis `50eaf5c`), base H2 **fichier** `cotisation-service/target/demo-outbox` (`AUTO_SERVER=TRUE`), broker `apache/kafka:4.4.0` du compose. **Tout ce qui suit est un relevé de l'utilisateur** : je n'ai pas rejoué les services, et les sorties brutes (logs, `curl`, console) ne sont pas reproduites ici. Les commandes de la dernière sous-section sont reconstituées à partir du plan (section 9) et du relevé, et n'ont pas été rejouées non plus.
 
 ### Prérequis et pièges rencontrés
 
@@ -156,3 +165,66 @@ Lecture du topic :
 ```powershell
 docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server :9092 --topic cotisations.emises --from-beginning --timeout-ms 5000
 ```
+
+## 11. Migration vers Oracle (24/11/2026)
+
+Environnement : Oracle Free 23ai ; tests sur le conteneur `gvenzl/oracle-free:23.26.4-slim-faststart` (Testcontainers) ; Oracle local de l'utilisateur en 23.4.0.24.05 ; `ojdbc17` (version gérée par le BOM de Spring Boot). Résultat : `mvn -B -pl cotisation-service -am test` : 56 tests pour `cotisation-service`, `BUILD SUCCESS` (lancement 7 du 24/11/2026, journal non versionné ; conteneur démarré en 2 min 17 s).
+
+### Ce qui change (constaté dans les sources)
+- `application.yml` : `spring.datasource.url|username|password` = `${COTISATION_DB_URL:jdbc:oracle:thin:@localhost:1522/freepdb1}`, `${COTISATION_DB_USER:kafka_mutuelle}`, `${COTISATION_DB_PASSWORD:…}` (valeurs par défaut de développement, les mêmes que pour `prelevement-service` ; la valeur par défaut du mot de passe n'est pas reproduite ici, voir `application.yml`) ; `driver-class-name: oracle.jdbc.OracleDriver` ; `spring.sql.init.mode: always`. **Non testé sans `always`** : le commentaire équivalent de `prelevement-service/src/main/resources/application.yml` (lignes 42 à 45, « Oracle n'est pas une base embarquée : sans "always", schema.sql ne serait pas appliqué ») n'est pas non plus sourcé dans la documentation de Spring Boot.
+- `schema.sql` : schéma Oracle (section 3), appliqué à chaque démarrage. **Constaté** : `CREATE TABLE IF NOT EXISTS` et `CREATE INDEX IF NOT EXISTS` passent sans erreur sur 23.26.4 (aucun `ORA-` dans le lancement 7, où chaque contexte réapplique le script ; journal non versionné) ; relevé de l'utilisateur : acceptés aussi sur 23.4.0.24.05.
+- **Une table existante n'est pas modifiée** (déduit du sens de `IF NOT EXISTS`, non testé) : une ancienne table `OUTBOX` aux types `TIMESTAMP WITH TIME ZONE` resterait telle quelle et l'index se poserait dessus (section 12). Elle est à supprimer avant le premier démarrage.
+- La dépendance H2 est retirée : aucune référence restante dans `cotisation-service/src` (recherche faite avant le retrait).
+
+### Piège : `java.time.Instant` en paramètre (constaté)
+`ojdbc17` refuse un `Instant` lié comme paramètre. Premier lancement d'`OutboxJdbcTest` sur Oracle (lancement 1, journal non versionné) : 7 tests sur 7 en erreur, message exact :
+```
+PreparedStatementCallback; uncategorized SQLException for SQL [INSERT INTO outbox (id_evenement, topic, cle, payload, cree_le) VALUES (?, ?, ?, ?, ?)]; SQL state [99999]; error code [17004]; ORA-17004: Type de colonne non valide
+```
+**Solution (constatée, tests verts)** : lier `OffsetDateTime.ofInstant(instant, ZoneOffset.UTC)` pour `cree_le` et `envoye_le` (`OutboxJdbc`) ; les tests relisent avec `rs.getObject(colonne, OffsetDateTime.class)`. Même découverte que pour `prelevement-service` ([phase-5-etape-1-oracle.md](phase-5-etape-1-oracle.md)). Avec le correctif, les `@SpringBootTest` encore sur H2 à cette étape passaient aussi (constaté, 55 tests, lancement 2, journal non versionné).
+
+### `FOR UPDATE SKIP LOCKED` et `ORA-02014` (relevé de l'utilisateur ; non vérifié sur 23.26.4)
+- **Relevé par l'utilisateur sur Oracle local 23.4.0.24.05** : `… FETCH FIRST 2 ROWS ONLY FOR UPDATE SKIP LOCKED` donne `ORA-02014`. **Non refait** sur le conteneur de test 23.26.4 : **non vérifié** sur cette version.
+- Repli accepté sur 23.4 (même relevé) : `WHERE id_evenement IN (SELECT id_evenement FROM (SELECT … ORDER BY cree_le, id_evenement) WHERE ROWNUM <= 2) FOR UPDATE SKIP LOCKED`.
+- **Déduit, non testé à deux sessions** : la sous-requête ne verrouille rien, donc une instance peut recevoir moins de lignes que demandé.
+- **Hors périmètre** : `SKIP LOCKED` fera l'objet d'une tâche séparée, avec le test qui documente la perte d'ordre par clé. La lecture actuelle (mono-instance) conserve l'ordre par clé ; tout reste « au moins une fois ».
+
+### Ce que prouve `[true, false]` (`OutboxTransactionIntegrationTest`)
+- **Prouvé sur Oracle** : pendant `enregistrer`, une transaction est active quand l'appel passe par le cas d'usage (`@Transactional`, `EmettreCotisation.java:25`) et inactive en appel direct ; les 2 lignes sont validées.
+- **Déduit, non exécuté** : sans `@Transactional`, la liste serait `[false, false]` et l'assertion échouerait.
+- **Non prouvé** : l'annulation de l'`INSERT` si le cas d'usage échoue après `enregistrer`. Il n'y a pas de test de rollback ; **déduit** : peu de valeur ici, car la transaction ne porte qu'un `INSERT` et un tel test ne vérifierait que le gestionnaire de transactions de Spring. Il en faudrait un dès qu'une table métier existe.
+
+## 12. Index de lecture du relais (mesuré le 24/11/2026 sur des copies)
+
+### Décision
+`cree_le` et `envoye_le` en `TIMESTAMP WITH LOCAL TIME ZONE` ; index `idx_outbox_a_envoyer (envoye_le, cree_le, id_evenement)` (`schema.sql`). `OutboxJdbcTest.l_index_de_lecture_porte_les_colonnes_dans_l_ordre_du_relais` vérifie la **structure** (colonnes et positions 1 à 3 via `USER_IND_COLUMNS`), pas le plan (trop dépendant des statistiques et de la version).
+
+**Constaté : ce test a d'abord été rouge** (lancement 4, journal non versionné), avec des colonnes `TIMESTAMP WITH TIME ZONE` : `USER_IND_COLUMNS` renvoyait `["1:SYS_NC00007$", "2:SYS_NC00008$", "3:ID_EVENEMENT"]` au lieu de `["1:ENVOYE_LE", "2:CREE_LE", "3:ID_EVENEMENT"]`. **C'est ce rouge qui a révélé que l'index n'était pas posé sur les colonnes brutes** ; la sonde ci-dessous a ensuite mesuré les conséquences. Avec `TIMESTAMP WITH LOCAL TIME ZONE`, le même test, non modifié, passe (lancement 7, 56 tests).
+
+### Protocole (refaisable)
+Image `gvenzl/oracle-free:23.26.4-slim-faststart`, conteneur jetable ; test jetable, non versionné, supprimé après usage, sur des **copies** de tables, jamais sur `outbox`. Relevé brut : [plan-relais-sonde.txt](plan-relais-sonde.txt). **†** : d'après le code du test jetable (supprimé), non vérifiable dans `plan-relais-sonde.txt` ni dans `lancement6.log`.
+1. **Volume** : 50 000 lignes par table (lisible : `NUM_ROWS=50000`) ; payload d'environ 200 octets † ; `INSERT … SELECT … FROM dual CONNECT BY LEVEL <= 50000` † ; 500 lignes non envoyées (lisible : `NUM_NULLS(envoye_le)=500`, 5 000 pour la dernière variante), **les plus récentes par `cree_le`** † ; les autres ont `envoye_le` = `cree_le` + 1 s † ; dates en UTC (`TIMESTAMP '2026-11-01 00:00:00 +00:00' + NUMTODSINTERVAL(LEVEL, 'SECOND')`) †.
+2. **Statistiques** calculées avant chaque plan, y compris après la création de l'index (le fichier montre `NUM_ROWS` avant et après l'index) ; appel `DBMS_STATS.GATHER_TABLE_STATS(USER, table, cascade => TRUE)` †.
+3. **Plan** : `EXPLAIN PLAN FOR` la requête du relais avec liaison (`?` = 50), puis `DBMS_XPLAN.DISPLAY(NULL, NULL, 'TYPICAL')` (lisible dans les en-têtes du fichier), **dans la même connexion** †. Avec une connexion par instruction : `Error: cannot fetch last explain plan from PLAN_TABLE` (constaté au lancement 4, journal non conservé).
+4. **Exécution réelle** avec `/*+ GATHER_PLAN_STATISTICS */` (lisible dans le texte SQL des curseurs), puis `DBMS_XPLAN.DISPLAY_CURSOR(NULL, NULL, 'ALLSTATS LAST')` (lisible dans les en-têtes). Aucun hint de forçage d'index (lisible dans les textes SQL).
+5. **Lectures logiques** : `consistent gets` lus dans `V$MYSTAT` joint à `V$STATNAME` †, avant et après une exécution précédée d'une première exécution d'analyse † ; surcoût de la lecture elle-même mesuré à 0 (lisible : `surcout de la mesure seule=0`).
+6. **Droits** : une connexion `SYSTEM` du conteneur jetable accorde `SELECT_CATALOG_ROLE` à `kafka_mutuelle` (lisible : première ligne du fichier) **avant** l'ouverture de la connexion applicative †. Sans ce droit : `User has no SELECT privilege on V$SESSION` (lancement 5, journal non versionné).
+7. **Variantes** (cinq tables, lisibles dans les titres du fichier) : `TIMESTAMP WITH TIME ZONE` (requête d'origine, puis requête réécrite avec `SYS_EXTRACT_UTC`), `TIMESTAMP(6)`, `TIMESTAMP WITH LOCAL TIME ZONE`, colonne drapeau `envoye NUMBER(1)` (`WHERE envoye = 0`, index `(envoye, cree_le, id_evenement)`, lisible), `TIMESTAMP(6)` avec 5 000 lignes non envoyées. Même DDL que `outbox` hors type des dates ou colonne drapeau †.
+
+### Constaté (copies de 50 000 lignes, 50 lignes lues)
+| Variante | Lectures avant l'index | Lectures après | Plan après l'index |
+|---|---|---|---|
+| `TIMESTAMP WITH TIME ZONE`, requête d'origine | 3 595 | **3 595** | inchangé : `TABLE ACCESS FULL` (même `Plan hash value` 2730945086) |
+| même table, requête réécrite `SYS_EXTRACT_UTC(...)` | non mesuré | **41** | `INDEX RANGE SCAN` |
+| `TIMESTAMP(6)` | 3 595 | **41** | `INDEX RANGE SCAN`, `access("ENVOYE_LE" IS NULL)` |
+| **`TIMESTAMP WITH LOCAL TIME ZONE`** (retenu) | 3 652 | **41** | `INDEX RANGE SCAN`, `access("ENVOYE_LE" IS NULL)` |
+| colonne drapeau `envoye = 0` | 3 595 | 41 | `INDEX RANGE SCAN`, `access("ENVOYE"=0)` : aucun gain, écartée |
+| `TIMESTAMP(6)`, 5 000 lignes non envoyées | 3 595 | **383** | `INDEX RANGE SCAN` (25 lectures d'index au lieu de 4) |
+- **Piège** : sur `TIMESTAMP WITH TIME ZONE`, Oracle indexe `SYS_EXTRACT_UTC("ENVOYE_LE")` et `SYS_EXTRACT_UTC("CREE_LE")` (`USER_IND_EXPRESSIONS`, colonnes virtuelles `SYS_NC00007$`, `SYS_NC00008$`). La requête compare la colonne brute : **l'index n'est pas utilisé, sans aucune erreur**. Sur `TIMESTAMP WITH LOCAL TIME ZONE` et `TIMESTAMP(6)`, l'index porte les colonnes brutes.
+- **Un tri subsiste** dans tous les plans avec index (`SORT ORDER BY STOPKEY`), y compris avec la colonne drapeau (condition d'égalité) : l'hypothèse « `IS NULL` n'est pas traité comme une égalité » est écartée. Le tri porte sur les lignes en attente (500 lues à l'accès par rowid pour 50 renvoyées ; 5 000 pour 383 lectures), en mémoire. **Cause inexpliquée, non creusée.**
+- Les segments de table et d'index ont les mêmes tailles pour toutes les variantes (30 408 704 et 3 145 728 octets) : **déduit** que ce sont des tailles d'étendues, qui ne départagent pas les variantes.
+
+### Déduit (non mesuré)
+- Le plan de la **vraie** table `outbox` avec la liaison de `OutboxJdbc` n'est pas mesuré : seule la copie `TIMESTAMP WITH LOCAL TIME ZONE` de la sonde l'est (même DDL).
+- Le coût de lecture suit l'**arriéré**, pas la taille du lot (41 lectures pour 500 lignes en attente, 383 pour 5 000).
+- **Compromis de l'index** : il couvre aussi les lignes déjà envoyées (la table n'est pas purgée), donc il croît avec elle ; chaque `marquerEnvoye` déplace l'entrée de l'index (la ligne quitte la zone `envoye_le` NULL).

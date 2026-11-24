@@ -1,0 +1,355 @@
+# Sonde du plan de la requête du relais de l'outbox : relevé brut
+# Date : 24/11/2026 (heure locale +01:00). Image : gvenzl/oracle-free:23.26.4-slim-faststart (conteneur jetable, Testcontainers).
+# Mesure sur COPIES de tables (outbox_plan, outbox_plan_ts, outbox_plan_ltz, outbox_plan_flag, outbox_plan_ts5k), pas sur la table outbox de l'application.
+# Le test jetable qui a produit ce fichier a été supprimé après usage et n'est pas versionné : protocole dans docs/phase-3-outbox.md, section 12.
+# Contenu ci-dessous : sortie telle que produite, sans modification.
+
+SYSTEM : connexion OK, SELECT_CATALOG_ROLE accorde a kafka_mutuelle
+
+##################### outbox_plan (cree_le/envoye_le : TIMESTAMP WITH TIME ZONE, non envoyees : 500)
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=500
+Taille table avant index : 30408704 octets
+consistent gets AVANT l'index, requete d'origine : lignes lues=50 consistent gets=3595 (surcout de la mesure seule=0)
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=500
+USER_IND_COLUMNS (index_name, column_position, column_name) :
+  IDX_OUTBOX_PLAN 1 SYS_NC00007$
+  IDX_OUTBOX_PLAN 2 SYS_NC00008$
+  IDX_OUTBOX_PLAN 3 ID_EVENEMENT
+USER_IND_EXPRESSIONS (index_name, column_position, column_expression) :
+  IDX_OUTBOX_PLAN 1 SYS_EXTRACT_UTC("ENVOYE_LE")
+  IDX_OUTBOX_PLAN 2 SYS_EXTRACT_UTC("CREE_LE")
+Taille table : 30408704 octets ; taille index : 3145728 octets
+=== PLAN APRES L'INDEX outbox_plan : requete d'origine (EXPLAIN PLAN avec liaison ?=50, DBMS_XPLAN.DISPLAY TYPICAL) ===
+Plan hash value: 2730945086
+ 
+---------------------------------------------------------------------------------------
+| Id  | Operation               | Name        | Rows  | Bytes | Cost (%CPU)| Time     |
+---------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT        |             |    10 |  4710 |   991   (1)| 00:00:01 |
+|*  1 |  COUNT STOPKEY          |             |       |       |            |          |
+|   2 |   VIEW                  |             |   500 |   229K|   991   (1)| 00:00:01 |
+|*  3 |    SORT ORDER BY STOPKEY|             |   500 |   242K|   991   (1)| 00:00:01 |
+|*  4 |     TABLE ACCESS FULL   | OUTBOX_PLAN |   500 |   242K|   990   (1)| 00:00:01 |
+---------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   4 - filter("ENVOYE_LE" IS NULL)
+consistent gets APRES l'index outbox_plan : requete d'origine : lignes lues=50 consistent gets=3595 (surcout de la mesure seule=0)
+=== CURSEUR outbox_plan : requete d'origine (DISPLAY_CURSOR ALLSTATS LAST, hint GATHER_PLAN_STATISTICS) ===
+SQL_ID  7a9ks3kyurdz3, child number 0
+-------------------------------------
+SELECT /*+ GATHER_PLAN_STATISTICS */ id_evenement, topic, cle, payload 
+FROM outbox_plan WHERE envoye_le IS NULL ORDER BY cree_le, id_evenement 
+FETCH FIRST :1 ROWS ONLY
+ 
+Plan hash value: 2730945086
+ 
+----------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation               | Name        | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+----------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT        |             |      1 |        |     50 |00:00:00.01 |    3595 |       |       |          |
+|*  1 |  COUNT STOPKEY          |             |      1 |        |     50 |00:00:00.01 |    3595 |       |       |          |
+|   2 |   VIEW                  |             |      1 |    500 |     50 |00:00:00.01 |    3595 |       |       |          |
+|*  3 |    SORT ORDER BY STOPKEY|             |      1 |    500 |     50 |00:00:00.01 |    3595 | 43008 | 43008 |38912  (0)|
+|*  4 |     TABLE ACCESS FULL   | OUTBOX_PLAN |      1 |    500 |    500 |00:00:00.01 |    3595 |       |       |          |
+----------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   4 - filter("ENVOYE_LE" IS NULL)
+ 
+=== PLAN APRES L'INDEX outbox_plan : A2 requete reecrite SYS_EXTRACT_UTC (EXPLAIN PLAN avec liaison ?=50, DBMS_XPLAN.DISPLAY TYPICAL) ===
+Plan hash value: 76936992
+ 
+----------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name            | Rows  | Bytes | Cost (%CPU)| Time     |
+----------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                 |    10 |  4710 |    41   (3)| 00:00:01 |
+|*  1 |  COUNT STOPKEY                         |                 |       |       |            |          |
+|   2 |   VIEW                                 |                 |   500 |   229K|    41   (3)| 00:00:01 |
+|*  3 |    SORT ORDER BY STOPKEY               |                 |   500 |   240K|    41   (3)| 00:00:01 |
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN     |   500 |   240K|    40   (0)| 00:00:01 |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN |   500 |       |     4   (0)| 00:00:01 |
+----------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access(SYS_EXTRACT_UTC("ENVOYE_LE") IS NULL)
+consistent gets APRES l'index outbox_plan : A2 requete reecrite SYS_EXTRACT_UTC : lignes lues=50 consistent gets=41 (surcout de la mesure seule=0)
+=== CURSEUR outbox_plan : A2 requete reecrite SYS_EXTRACT_UTC (DISPLAY_CURSOR ALLSTATS LAST, hint GATHER_PLAN_STATISTICS) ===
+SQL_ID  3t519jthksk3n, child number 0
+-------------------------------------
+SELECT /*+ GATHER_PLAN_STATISTICS */ id_evenement, topic, cle, payload 
+FROM outbox_plan WHERE SYS_EXTRACT_UTC(envoye_le) IS NULL ORDER BY 
+SYS_EXTRACT_UTC(cree_le), id_evenement FETCH FIRST :1 ROWS ONLY
+ 
+Plan hash value: 76936992
+ 
+-----------------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name            | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+-----------------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                 |      1 |        |     50 |00:00:00.01 |      41 |       |       |          |
+|*  1 |  COUNT STOPKEY                         |                 |      1 |        |     50 |00:00:00.01 |      41 |       |       |          |
+|   2 |   VIEW                                 |                 |      1 |    500 |     50 |00:00:00.01 |      41 |       |       |          |
+|*  3 |    SORT ORDER BY STOPKEY               |                 |      1 |    500 |     50 |00:00:00.01 |      41 | 38912 | 38912 |34816  (0)|
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN     |      1 |    500 |    500 |00:00:00.01 |      41 |       |       |          |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN |      1 |    500 |    500 |00:00:00.01 |       4 |       |       |          |
+-----------------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access("OUTBOX_PLAN"."SYS_NC00007$" IS NULL)
+ 
+
+##################### outbox_plan_ts (cree_le/envoye_le : TIMESTAMP(6), non envoyees : 500)
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=500
+Taille table avant index : 30408704 octets
+consistent gets AVANT l'index, requete d'origine : lignes lues=50 consistent gets=3595 (surcout de la mesure seule=0)
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=500
+USER_IND_COLUMNS (index_name, column_position, column_name) :
+  IDX_OUTBOX_PLAN_TS 1 ENVOYE_LE
+  IDX_OUTBOX_PLAN_TS 2 CREE_LE
+  IDX_OUTBOX_PLAN_TS 3 ID_EVENEMENT
+USER_IND_EXPRESSIONS (index_name, column_position, column_expression) :
+Taille table : 30408704 octets ; taille index : 3145728 octets
+=== PLAN APRES L'INDEX outbox_plan_ts : requete d'origine (EXPLAIN PLAN avec liaison ?=50, DBMS_XPLAN.DISPLAY TYPICAL) ===
+Plan hash value: 18238432
+ 
+-------------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name               | Rows  | Bytes | Cost (%CPU)| Time     |
+-------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                    |    10 |  4710 |    41   (3)| 00:00:01 |
+|*  1 |  COUNT STOPKEY                         |                    |       |       |            |          |
+|   2 |   VIEW                                 |                    |   500 |   229K|    41   (3)| 00:00:01 |
+|*  3 |    SORT ORDER BY STOPKEY               |                    |   500 |   240K|    41   (3)| 00:00:01 |
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN_TS     |   500 |   240K|    40   (0)| 00:00:01 |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN_TS |   500 |       |     4   (0)| 00:00:01 |
+-------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access("ENVOYE_LE" IS NULL)
+consistent gets APRES l'index outbox_plan_ts : requete d'origine : lignes lues=50 consistent gets=41 (surcout de la mesure seule=0)
+=== CURSEUR outbox_plan_ts : requete d'origine (DISPLAY_CURSOR ALLSTATS LAST, hint GATHER_PLAN_STATISTICS) ===
+SQL_ID  gkj29f9bj8grr, child number 0
+-------------------------------------
+SELECT /*+ GATHER_PLAN_STATISTICS */ id_evenement, topic, cle, payload 
+FROM outbox_plan_ts WHERE envoye_le IS NULL ORDER BY cree_le, 
+id_evenement FETCH FIRST :1 ROWS ONLY
+ 
+Plan hash value: 18238432
+ 
+--------------------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name               | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+--------------------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                    |      1 |        |     50 |00:00:00.01 |      41 |       |       |          |
+|*  1 |  COUNT STOPKEY                         |                    |      1 |        |     50 |00:00:00.01 |      41 |       |       |          |
+|   2 |   VIEW                                 |                    |      1 |    500 |     50 |00:00:00.01 |      41 |       |       |          |
+|*  3 |    SORT ORDER BY STOPKEY               |                    |      1 |    500 |     50 |00:00:00.01 |      41 | 38912 | 38912 |34816  (0)|
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN_TS     |      1 |    500 |    500 |00:00:00.01 |      41 |       |       |          |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN_TS |      1 |    500 |    500 |00:00:00.01 |       4 |       |       |          |
+--------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access("ENVOYE_LE" IS NULL)
+ 
+
+##################### outbox_plan_ltz (cree_le/envoye_le : TIMESTAMP WITH LOCAL TIME ZONE, non envoyees : 500)
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=500
+Taille table avant index : 30408704 octets
+consistent gets AVANT l'index, requete d'origine : lignes lues=50 consistent gets=3652 (surcout de la mesure seule=0)
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=500
+USER_IND_COLUMNS (index_name, column_position, column_name) :
+  IDX_OUTBOX_PLAN_LTZ 1 ENVOYE_LE
+  IDX_OUTBOX_PLAN_LTZ 2 CREE_LE
+  IDX_OUTBOX_PLAN_LTZ 3 ID_EVENEMENT
+USER_IND_EXPRESSIONS (index_name, column_position, column_expression) :
+Taille table : 30408704 octets ; taille index : 3145728 octets
+=== PLAN APRES L'INDEX outbox_plan_ltz : requete d'origine (EXPLAIN PLAN avec liaison ?=50, DBMS_XPLAN.DISPLAY TYPICAL) ===
+Plan hash value: 609782040
+ 
+--------------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name                | Rows  | Bytes | Cost (%CPU)| Time     |
+--------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                     |    10 |  4710 |    41   (3)| 00:00:01 |
+|*  1 |  COUNT STOPKEY                         |                     |       |       |            |          |
+|   2 |   VIEW                                 |                     |   500 |   229K|    41   (3)| 00:00:01 |
+|*  3 |    SORT ORDER BY STOPKEY               |                     |   500 |   240K|    41   (3)| 00:00:01 |
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN_LTZ     |   500 |   240K|    40   (0)| 00:00:01 |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN_LTZ |   500 |       |     4   (0)| 00:00:01 |
+--------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access("ENVOYE_LE" IS NULL)
+consistent gets APRES l'index outbox_plan_ltz : requete d'origine : lignes lues=50 consistent gets=41 (surcout de la mesure seule=0)
+=== CURSEUR outbox_plan_ltz : requete d'origine (DISPLAY_CURSOR ALLSTATS LAST, hint GATHER_PLAN_STATISTICS) ===
+SQL_ID  8840w1ux3n3w6, child number 0
+-------------------------------------
+SELECT /*+ GATHER_PLAN_STATISTICS */ id_evenement, topic, cle, payload 
+FROM outbox_plan_ltz WHERE envoye_le IS NULL ORDER BY cree_le, 
+id_evenement FETCH FIRST :1 ROWS ONLY
+ 
+Plan hash value: 609782040
+ 
+---------------------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name                | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+---------------------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                     |      1 |        |     50 |00:00:00.01 |      41 |       |       |          |
+|*  1 |  COUNT STOPKEY                         |                     |      1 |        |     50 |00:00:00.01 |      41 |       |       |          |
+|   2 |   VIEW                                 |                     |      1 |    500 |     50 |00:00:00.01 |      41 |       |       |          |
+|*  3 |    SORT ORDER BY STOPKEY               |                     |      1 |    500 |     50 |00:00:00.01 |      41 | 38912 | 38912 |34816  (0)|
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN_LTZ     |      1 |    500 |    500 |00:00:00.01 |      41 |       |       |          |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN_LTZ |      1 |    500 |    500 |00:00:00.01 |       4 |       |       |          |
+---------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access("ENVOYE_LE" IS NULL)
+ 
+
+##################### outbox_plan_flag (cree_le/envoye_le : TIMESTAMP(6), non envoyees : 500, colonne envoye NUMBER(1))
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=500
+Taille table avant index : 30408704 octets
+consistent gets AVANT l'index, WHERE envoye = 0 : lignes lues=50 consistent gets=3595 (surcout de la mesure seule=0)
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=500
+USER_IND_COLUMNS (index_name, column_position, column_name) :
+  IDX_OUTBOX_PLAN_FLAG 1 ENVOYE
+  IDX_OUTBOX_PLAN_FLAG 2 CREE_LE
+  IDX_OUTBOX_PLAN_FLAG 3 ID_EVENEMENT
+USER_IND_EXPRESSIONS (index_name, column_position, column_expression) :
+Taille table : 30408704 octets ; taille index : 3145728 octets
+=== PLAN APRES L'INDEX outbox_plan_flag : WHERE envoye = 0 (EXPLAIN PLAN avec liaison ?=50, DBMS_XPLAN.DISPLAY TYPICAL) ===
+Plan hash value: 3299514239
+ 
+---------------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name                 | Rows  | Bytes | Cost (%CPU)| Time     |
+---------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                      |    10 |  4710 |    41   (3)| 00:00:01 |
+|*  1 |  COUNT STOPKEY                         |                      |       |       |            |          |
+|   2 |   VIEW                                 |                      |   500 |   229K|    41   (3)| 00:00:01 |
+|*  3 |    SORT ORDER BY STOPKEY               |                      |   500 |   236K|    41   (3)| 00:00:01 |
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN_FLAG     |   500 |   236K|    40   (0)| 00:00:01 |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN_FLAG |   500 |       |     4   (0)| 00:00:01 |
+---------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access("ENVOYE"=0)
+consistent gets APRES l'index outbox_plan_flag : WHERE envoye = 0 : lignes lues=50 consistent gets=41 (surcout de la mesure seule=0)
+=== CURSEUR outbox_plan_flag : WHERE envoye = 0 (DISPLAY_CURSOR ALLSTATS LAST, hint GATHER_PLAN_STATISTICS) ===
+SQL_ID  247k7sp6a7f07, child number 0
+-------------------------------------
+SELECT /*+ GATHER_PLAN_STATISTICS */ id_evenement, topic, cle, payload 
+FROM outbox_plan_flag WHERE envoye = 0 ORDER BY cree_le, id_evenement 
+FETCH FIRST :1 ROWS ONLY
+ 
+Plan hash value: 3299514239
+ 
+----------------------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name                 | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+----------------------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                      |      1 |        |     50 |00:00:00.01 |      41 |       |       |          |
+|*  1 |  COUNT STOPKEY                         |                      |      1 |        |     50 |00:00:00.01 |      41 |       |       |          |
+|   2 |   VIEW                                 |                      |      1 |    500 |     50 |00:00:00.01 |      41 |       |       |          |
+|*  3 |    SORT ORDER BY STOPKEY               |                      |      1 |    500 |     50 |00:00:00.01 |      41 | 38912 | 38912 |34816  (0)|
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN_FLAG     |      1 |    500 |    500 |00:00:00.01 |      41 |       |       |          |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN_FLAG |      1 |    500 |    500 |00:00:00.01 |       4 |       |       |          |
+----------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access("ENVOYE"=0)
+ 
+
+##################### outbox_plan_ts5k (cree_le/envoye_le : TIMESTAMP(6), non envoyees : 5000)
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=5000
+Taille table avant index : 30408704 octets
+consistent gets AVANT l'index, requete d'origine, arriere de 5 000 : lignes lues=50 consistent gets=3595 (surcout de la mesure seule=0)
+NUM_ROWS=50000 NUM_NULLS(envoye_le)=5000
+USER_IND_COLUMNS (index_name, column_position, column_name) :
+  IDX_OUTBOX_PLAN_TS5K 1 ENVOYE_LE
+  IDX_OUTBOX_PLAN_TS5K 2 CREE_LE
+  IDX_OUTBOX_PLAN_TS5K 3 ID_EVENEMENT
+USER_IND_EXPRESSIONS (index_name, column_position, column_expression) :
+Taille table : 30408704 octets ; taille index : 3145728 octets
+=== PLAN APRES L'INDEX outbox_plan_ts5k : requete d'origine, arriere de 5 000 (EXPLAIN PLAN avec liaison ?=50, DBMS_XPLAN.DISPLAY TYPICAL) ===
+Plan hash value: 430355352
+ 
+-----------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name                 | Rows  | Bytes |TempSpc| Cost (%CPU)| Time     |
+-----------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                      |    10 |  4710 |       |   911   (1)| 00:00:01 |
+|*  1 |  COUNT STOPKEY                         |                      |       |       |       |            |          |
+|   2 |   VIEW                                 |                      |  5000 |  2299K|       |   911   (1)| 00:00:01 |
+|*  3 |    SORT ORDER BY STOPKEY               |                      |  5000 |  2402K|  2512K|   911   (1)| 00:00:01 |
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN_TS5K     |  5000 |  2402K|       |   387   (0)| 00:00:01 |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN_TS5K |  5000 |       |       |    29   (0)| 00:00:01 |
+-----------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access("ENVOYE_LE" IS NULL)
+consistent gets APRES l'index outbox_plan_ts5k : requete d'origine, arriere de 5 000 : lignes lues=50 consistent gets=383 (surcout de la mesure seule=0)
+=== CURSEUR outbox_plan_ts5k : requete d'origine, arriere de 5 000 (DISPLAY_CURSOR ALLSTATS LAST, hint GATHER_PLAN_STATISTICS) ===
+SQL_ID  1c4bfy3x3h8rr, child number 0
+-------------------------------------
+SELECT /*+ GATHER_PLAN_STATISTICS */ id_evenement, topic, cle, payload 
+FROM outbox_plan_ts5k WHERE envoye_le IS NULL ORDER BY cree_le, 
+id_evenement FETCH FIRST :1 ROWS ONLY
+ 
+Plan hash value: 430355352
+ 
+----------------------------------------------------------------------------------------------------------------------------------------------------
+| Id  | Operation                              | Name                 | Starts | E-Rows | A-Rows |   A-Time   | Buffers |  OMem |  1Mem | Used-Mem |
+----------------------------------------------------------------------------------------------------------------------------------------------------
+|   0 | SELECT STATEMENT                       |                      |      1 |        |     50 |00:00:00.01 |     383 |       |       |          |
+|*  1 |  COUNT STOPKEY                         |                      |      1 |        |     50 |00:00:00.01 |     383 |       |       |          |
+|   2 |   VIEW                                 |                      |      1 |   5000 |     50 |00:00:00.01 |     383 |       |       |          |
+|*  3 |    SORT ORDER BY STOPKEY               |                      |      1 |   5000 |     50 |00:00:00.01 |     383 | 38912 | 38912 |34816  (0)|
+|   4 |     TABLE ACCESS BY INDEX ROWID BATCHED| OUTBOX_PLAN_TS5K     |      1 |   5000 |   5000 |00:00:00.01 |     383 |       |       |          |
+|*  5 |      INDEX RANGE SCAN                  | IDX_OUTBOX_PLAN_TS5K |      1 |   5000 |   5000 |00:00:00.01 |      25 |       |       |          |
+----------------------------------------------------------------------------------------------------------------------------------------------------
+ 
+Predicate Information (identified by operation id):
+---------------------------------------------------
+ 
+   1 - filter(ROWNUM<=:1)
+   3 - filter(ROWNUM<=:1)
+   5 - access("ENVOYE_LE" IS NULL)
+ 
