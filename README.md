@@ -169,7 +169,7 @@ Un connecteur **JDBC Sink** (`connect/jdbc-sink-resultats.json`) copie `prelevem
 - **Perte du dossier d'état local** (constaté le 24/11/2026) : dossier d'état supprimé, topics de changelog conservés ; au redémarrage, `stats-store` et le store de déduplication sont restaurés depuis leurs changelogs (3,0 s), `GET /stats` renvoie les mêmes comptes et montants. Un redémarrage rapproché d'un arrêt sans départ du groupe peut attendre jusqu'à environ 45 s (27,5 s constatés). Détail : [kafka-streams.md](docs/kafka-streams.md), §8 ter.
 - **Vérifié à la main** (service démarré contre le broker 4.4.0 et le registre, relevés manuels, sans test automatisé) : démarrage réel, agrégation des messages déjà présents sur le topic, mise à jour en temps réel après une nouvelle cotisation, restauration du state store après redémarrage (chiffres identiques avant et après). Détail : [kafka-streams.md](docs/kafka-streams.md), §8 bis.
 - **Constaté au rejeu** : avec la déduplication, remettre les offsets du groupe à zéro puis redémarrer laisse les chiffres inchangés (3 acceptés/1 rejeté/335.0 et 0/1/200.0). Avant la déduplication, le même geste donnait 6/2/670.0.
-- **Non vérifié** : si la restauration (agrégat et store de déduplication) vient du dossier d'état local ou du changelog, le cas hors rétention contre le broker réel (prouvé seulement par un test), le rôle exact du cache, et si `exactly_once_v2` changerait le résultat.
+- **Non vérifié** : le cas avec dossier d'état local conservé (réutilisation des checkpoints), le cas hors rétention contre le broker réel (prouvé seulement par un test), le rôle exact du cache, et si `exactly_once_v2` changerait le résultat.
 
 ## Tests
 

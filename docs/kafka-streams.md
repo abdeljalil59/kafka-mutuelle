@@ -141,11 +141,11 @@ Observations faites à la main sur `stats-service` démarré sur l'hôte contre 
 - Une agrégation compteur/somme n'est pas idempotente : un rejeu additionne à nouveau. `dernierEvenement` est stable, ce qui suggère un maximum.
 - La sous-topologie 0 est sans état ; la sous-topologie 1 porte le state store (d'après les dossiers `0_x` vides et `1_x` avec `rocksdb`).
 - Relevé du 23/11 (dossier d'état conservé entre l'arrêt et la relance) : les dossiers `rocksdb` datent du premier démarrage, donc la restauration constatée alors vient **probablement du disque local** et non du changelog (déduit, non tranché par ce relevé). L'autre voie, la restauration depuis le changelog sans dossier local, est **constatée** au §8 ter B.
-- L'identifiant du client Streams (même valeur dans les logs avant et après redémarrage) est probablement conservé dans `kafka-streams-process-metadata`. Le 24/11, après suppression du dossier, le journal indique « No process id found on disk, got fresh process id … » ; aucun lancement témoin sans suppression n'a été fait (déduit, non vérifié).
+- Identifiant du client Streams. **Constaté** (journaux du 24/11) : au lancement de 16:11:45,751 (`stats-demo.log`), « Reading UUID from process file: 421625d8-b062-4d45-8308-6eb7baaa294c » ; aux lancements de 16:12:27,186 (`stats-demo2.log`) et de 17:11:02,111 (`stats-demo3.log`), « No process id found on disk, got fresh process id … ». **Hors journaux** : le dossier d'état étant absent au démarrage de chacun des deux (relevé de session : `CreationTime` du dossier 16:12:27 puis 17:11:02, égal à l'heure du lancement, aucun journal n'enregistre la suppression). **Déduit** : l'identifiant 421625d8 avait été écrit par un lancement antérieur ; le fichier concerné est probablement `kafka-streams-process-metadata` (nom non observé dans le dossier). **Non vérifié** : la réutilisation de l'identifiant sur deux lancements consécutifs sans suppression du dossier (lancement témoin non fait).
 - La suppression manuelle du dossier d'état (dernière puce « Constaté ») a eu lieu **après** que l'outil de réinitialisation a supprimé le changelog et remis les offsets à 0 : l'état a donc été recalculé depuis le topic source, et non restauré depuis le changelog. Elle ne tranche pas l'origine de la restauration.
 - Un `put` hors rétention est écrit dans le changelog du `WindowStore` (P3a) ; on ne sait pas s'il est conservé dans le store.
 - `exactly_once_v2` ne remplacerait pas la déduplication : relire des messages (remise à zéro des offsets, republication) est une nouvelle lecture.
-- L'identifiant du client Streams a changé (`8e4472a7-…` puis `e2682e39-…`) après la suppression du dossier d'état : c'est cohérent avec sa conservation dans `kafka-streams-process-metadata` (fichier non lu).
+- Relevé du 23/11 pour l'identifiant du client Streams : identique avant et après redémarrage ; il a changé (`8e4472a7-…` puis `e2682e39-…`) après la suppression du dossier d'état. Cohérent avec une conservation dans un fichier du dossier d'état (déduit ; voir la puce « Identifiant du client Streams » ci-dessus).
 - Un membre resté dans le groupe un court moment après l'arrêt du service est probablement un membre qui n'a pas quitté proprement le groupe (non prouvé).
 
 ### Non vérifié
@@ -186,16 +186,16 @@ Groupe avant la relance : « Consumer group 'stats-service' has no active member
 - Pour 1_0, 1_1, 1_2 et pour les deux stores : « State store stats-store (et stats-dedup-store) did not find checkpoint offset, hence would default to the starting offset at changelog stats-service-stats-store-changelog-N ».
 - Relecture depuis le début : « Seeking to offset 0 for partition stats-service-stats-dedup-store-changelog-N » ; pour `stats-store` : « Seeking to AutoOffsetResetStrategy{type=earliest} offset of partition stats-service-stats-store-changelog-N », puis « Resetting offset … FetchPosition{offset=0 ».
 - « Finished restoring changelog … to store stats-store with a total number of N records » : partitions 0, 1, 2 = 1, 2, 1. Pour `stats-dedup-store` : 1, 2, 4. Les lags annoncés sont la somme des deux changelogs par partition (1+1, 2+2, 4+1).
+- Les deux stores sont restaurés depuis leurs changelogs : aucun checkpoint local n'est trouvé (« did not find checkpoint offset »), chaque changelog est relu depuis l'offset 0 (lignes « Seeking… » et « Resetting offset… » ci-dessus) et la restauration se termine (« Finished restoring changelog … to store … »).
 - « Stateful active task 1_0 / 1_1 / 1_2 completed restoration » ; les tâches 0_0, 0_1, 0_2 sont sans état.
 - `GET /stats` après restauration : `ADH-CONNECT-01` 3 acceptés, 1 rejeté, 335.0 ; `ADH-CONNECT-02` 0, 1, 200.0 ; `ADH-DEMO-01` 2, 0, 85.0 (`dernierEvenement` 1795531858861). Mêmes comptes et montants que ceux relevés avant l'arrêt (partie A) ; `dernierEvenement` relevé avant l'arrêt pour `ADH-DEMO-01` seulement, identique.
 - Deux lignes `ERROR` « Failed to change permissions for the directory … » (`.\target\state-stores` et `.\target\state-stores\stats-service`) à 17:11:02,105 et 17:11:02,106, présentes aussi dans `stats-demo.log` et `stats-demo2.log` ; restauration aboutie ensuite ; aucun `WARN` dans les trois journaux.
 
 **Déduit** :
-- Les deux stores sont restaurés depuis leurs changelogs : aucun checkpoint local n'existait.
 - `stats-dedup-store` restaure 7 enregistrements, soit le nombre d'événements comptés (3+1, 0+1, 2+0) : le doublon n'y est pas entré deux fois.
 - Les lignes `ERROR` sont sans effet, pour la même cause qu'au §8 (permissions POSIX impossibles sur NTFS).
 
-**Non vérifié** : le cas avec dossier d'état conservé (réutilisation des checkpoints) ; le cas hors rétention ; `exactly_once_v2` ; la persistance de l'identifiant du client dans `kafka-streams-process-metadata` (pas de lancement témoin sans suppression).
+**Non vérifié** : le cas avec dossier d'état conservé (réutilisation des checkpoints) ; le cas hors rétention ; `exactly_once_v2` ; la réutilisation de l'identifiant du client sur deux lancements consécutifs sans suppression du dossier (lancement témoin non fait ; le fichier probable, `kafka-streams-process-metadata`, n'a pas été observé dans le dossier recréé).
 
 ### C. Redémarrage lent après un arrêt sans départ du groupe
 
