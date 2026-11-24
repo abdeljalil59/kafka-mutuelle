@@ -31,7 +31,7 @@ Les modules, leurs ports, leurs topics Kafka et leurs bases sont décrits dans �
 | Module | Port | Rôle | Kafka | Base |
 |---|---|---|---|---|
 | `events-contract` | — | schémas Avro partagés (`CotisationEmise`, `ResultatPrelevement`) : contrat d'interface entre les services, sans dépendance Spring | — | — |
-| `cotisation-service` | 8081 | reçoit les cotisations par REST et les publie par un relais d'outbox | producteur de `cotisations.emises` (Avro) | H2 (table `outbox`) |
+| `cotisation-service` | 8081 | reçoit les cotisations par REST et les publie par un relais d'outbox | producteur de `cotisations.emises` (Avro) | Oracle Free 23ai (table `outbox`) |
 | `prelevement-service` | 8083 | décide ACCEPTE ou REJETE (plafond), enregistre la décision, publie le résultat | consomme `cotisations.emises`, publie `prelevements.resultats` (Avro) **dans une transaction Kafka**, DLT (Dead Letter Topic : topic où atterrissent les messages en échec) sur `cotisations.emises-dlt` | Oracle Free 23ai |
 | `impaye-service` | 8084 | enregistre les prélèvements rejetés, relance un adhérent dès que ses rejets atteignent le seuil ; pas de DLT | consomme `prelevements.resultats` en `read_committed` (**sans transaction Kafka**), publie `impayes.relances` (JSON) | H2 en mémoire |
 | `stats-service` | 8086 | calcule en temps réel, par adhérent, le nombre de prélèvements acceptés et rejetés et le montant total (Kafka Streams) ; expose le résultat par une API REST | consomme `prelevements.resultats` (Avro) ; ne publie aucun topic métier (seulement les topics internes de Kafka Streams) | état local (RocksDB, une base clé-valeur embarquée), sauvegardé dans un topic Kafka |
@@ -40,10 +40,10 @@ Infra Docker (`infra/docker-compose.yml`) : Kafka KRaft (9092), Schema Registry 
 
 ## Prérequis
 
-- Docker Desktop (démarré avant toute commande `docker`), y compris pour `mvn verify` complet : les tests de `prelevement-service` démarrent Oracle dans un conteneur (premier téléchargement : environ 1,3 Go, 5,1 Go sur disque ; démarrage de 4 à plus de 10 minutes selon la mémoire de la machine, au-delà de laquelle le build échoue)
+- Docker Desktop (démarré avant toute commande `docker`), y compris pour `mvn verify` complet : les tests de `prelevement-service` et de `cotisation-service` démarrent Oracle dans un conteneur (premier téléchargement : environ 1,3 Go, 5,1 Go sur disque ; démarrage de 4 à plus de 10 minutes selon la mémoire de la machine, au-delà de laquelle le build échoue)
 - Java 17
 - Maven
-- **Oracle Free 23ai** installé en local, pour **exécuter** `prelevement-service` (par défaut `localhost:1522/freepdb1`, utilisateur `kafka_mutuelle`). URL, utilisateur et mot de passe se surchargent par les variables d'environnement `PRELEVEMENT_DB_URL`, `PRELEVEMENT_DB_USER` et `PRELEVEMENT_DB_PASSWORD`. Le service ne démarre pas sans base ; `cotisation-service` et `impaye-service` restent autonomes (H2).
+- **Oracle Free 23ai** installé en local, pour **exécuter** `prelevement-service` et `cotisation-service` (par défaut `localhost:1522/freepdb1`, utilisateur `kafka_mutuelle`). URL, utilisateur et mot de passe se surchargent par les variables d'environnement `PRELEVEMENT_DB_URL`, `PRELEVEMENT_DB_USER` et `PRELEVEMENT_DB_PASSWORD` pour le premier, `COTISATION_DB_URL`, `COTISATION_DB_USER` et `COTISATION_DB_PASSWORD` pour le second (mêmes valeurs par défaut). Ces services ne démarrent pas sans base ; `impaye-service` reste autonome (H2). `cotisation-service` crée sa table `outbox` au démarrage si elle n'existe pas ; une table existante n'est pas modifiée.
 
 ## Démarrage rapide
 
@@ -81,7 +81,7 @@ mvn -pl impaye-service spring-boot:run
 mvn -pl stats-service spring-boot:run
 ```
 
-`prelevement-service` ne démarre pas sans Oracle (voir « Prérequis »).
+`prelevement-service` et `cotisation-service` ne démarrent pas sans Oracle (voir « Prérequis »).
 
 **4. Envoyer une cotisation.** Sous Windows PowerShell, les guillemets du JSON passés directement à `curl` sont altérés : le corps est donc écrit d'abord dans un fichier (constaté). Le fichier `cotisation-demo.json` est créé par le lecteur ; il n'est pas versionné.
 
@@ -112,8 +112,8 @@ curl.exe http://localhost:8086/stats/ADH-DEMO-01
 - Kafka 4.4.0 (`apache/kafka:4.4.0`, KRaft, un nœud) et Kafka UI v1.5.0, par Docker Compose (`infra/docker-compose.yml`)
 - **Avro 1.11.5 et Confluent Schema Registry 7.9.11** (`io.confluent:kafka-avro-serializer` 7.9.11) : contrats typés de `cotisations.emises` et `prelevements.resultats`
 - **Kafka Streams** pour `stats-service` (version de `kafka-streams` gérée par Spring Boot, `io.confluent:kafka-streams-avro-serde` 7.9.11) ; **Kafka Connect** (`cp-kafka-connect:7.9.11`, plugin JDBC Sink 10.8.8) et **PostgreSQL 17** pour copier `prelevements.resultats` dans une table SQL, sans code Java
-- **Oracle Free 23ai** pour `prelevement-service` (table des décisions, idempotence) ; `ojdbc17` 23.26.3.0.0 ; tests sur Oracle dans un conteneur (Testcontainers 2.0.5, image `gvenzl/oracle-free:23.26.4-slim-faststart`)
-- **H2** pour `cotisation-service` (table `outbox`) et `impaye-service` (table `impaye`, en mémoire : les impayés sont perdus à l'arrêt)
+- **Oracle Free 23ai** pour `prelevement-service` (table des décisions, idempotence) et `cotisation-service` (table `outbox`, index de lecture du relais) ; `ojdbc17` 23.26.3.0.0 ; tests sur Oracle dans un conteneur (Testcontainers 2.0.5, image `gvenzl/oracle-free:23.26.4-slim-faststart`)
+- **H2** pour `impaye-service` (table `impaye`, en mémoire : les impayés sont perdus à l'arrêt)
 - **Actuator + Micrometer, Prometheus v3.16.0 et Grafana 13.3.1** : métriques des trois services (`/actuator/prometheus`), dashboard « Kafka Mutuelle » provisionné (5 lignes, 14 panneaux ; fichiers dans `prometheus/` et `grafana/`). Aucun panneau n'est encore dédié à `impaye-service` (sa cible Prometheus existe) ; deux panneaux sans filtre par service, la latence du listener et les connexions HikariCP, en afficheront les séries dès que la cible sera scrapée
 
 | Composant | Port de l'hôte |
@@ -126,7 +126,7 @@ curl.exe http://localhost:8086/stats/ADH-DEMO-01
 | **`impaye-service`** (Actuator, `/actuator/prometheus`) | **8084** (surchargeable par `IMPAYE_SERVER_PORT`) |
 | **Prometheus** | **9090** |
 | **Grafana** | **3000** (dashboard « Kafka Mutuelle » ; `admin`/`admin`, lecture anonyme : usage local uniquement) |
-| Oracle Free 23ai local (utilisé par `prelevement-service`) | 1522 (service `freepdb1`, utilisateur `kafka_mutuelle`) |
+| Oracle Free 23ai local (utilisé par `prelevement-service` et `cotisation-service`) | 1522 (service `freepdb1`, utilisateur `kafka_mutuelle`) |
 | **`stats-service`** (REST `/stats`, Kafka Streams) | **8086** (surchargeable par `STATS_SERVER_PORT`) |
 | **PostgreSQL 17** (cible du JDBC Sink, base `kafka_connect_sink`) | **5433** (5432 dans le conteneur) |
 | **Kafka Connect** (API REST) | **8085** (8083 dans le conteneur, car 8083 est pris par `prelevement-service`) |
@@ -172,10 +172,10 @@ Un connecteur **JDBC Sink** (`connect/jdbc-sink-resultats.json`) copie `prelevem
 
 ## Tests
 
-**248 tests** : `events-contract` 21, `cotisation-service` 55, `prelevement-service` 109, `impaye-service` 33, `stats-service` 30 (relevé au `mvn test -pl stats-service -am`, sans broker ni Docker). Provenance des 218 autres : `events-contract`, `cotisation-service` et `impaye-service` ont été relevés au `mvn -B verify -pl events-contract,cotisation-service,impaye-service` du 20/11/2026 (109 tests, de une à cinq minutes selon la charge, sans Oracle) ; les 109 de `prelevement-service` viennent du dernier build complet (leur code n'a pas changé depuis).
+**249 tests, somme dérivée** : `events-contract` 21, `cotisation-service` 56, `prelevement-service` 109, `impaye-service` 33, `stats-service` 30. Chaque nombre est mesuré à sa date, pas d'un bloc : `cotisation-service` 56 au `mvn -B -pl cotisation-service -am test` du 24/11/2026 (avec conteneur Oracle) ; `events-contract` 21, `impaye-service` 33 et `stats-service` 30 au `mvn -B verify -pl events-contract,impaye-service,stats-service` du 24/11/2026 (aucun conteneur démarré, 1 min 13 s) ; les 109 de `prelevement-service` viennent du dernier build complet, dont la date n'est pas consignée. **Constaté** par l'historique git : aucune modification de `prelevement-service` ni de `events-contract` après le 20/11/2026 (dernier commit sur `prelevement-service` : 20/11/2026 à 16:23). **Déduit** : le nombre 109 reste valable si ce build est postérieur à ce commit.
 
-- Build complet : `mvn -B verify` (Docker et mémoire suffisante pour Oracle).
-- Sans Oracle : `mvn -B verify -pl events-contract,cotisation-service,impaye-service,stats-service`.
+- Build complet : `mvn -B verify` (Docker et mémoire suffisante pour Oracle : `prelevement-service` et `cotisation-service` démarrent Oracle dans un conteneur).
+- Sans Oracle : `mvn -B verify -pl events-contract,impaye-service,stats-service` (84 tests, relevé le 24/11/2026).
 
 ## Avancement
 
@@ -187,7 +187,7 @@ Un connecteur **JDBC Sink** (`connect/jdbc-sink-resultats.json`) copie `prelevem
 | 3 | Idempotence, retries, DLT | Réalisée (idempotence, `@RetryableTopic`, DLT avec BackOff exponentiel : journaux de la phase 3 et [amelioration-dlt.md](docs/amelioration-dlt.md)) |
 | 4 | Prometheus puis Grafana | Réalisée sans exporter de lag broker (Actuator, Micrometer, Prometheus et Grafana ; lag par les métriques clientes Kafka) : [phase-6-metriques.md](docs/phase-6-metriques.md) (le « 6 » du nom de fichier est une étiquette de travail, voir « Études réalisées ») |
 | 5 | Dashboard live `kafka-lab` + scénarios | À faire |
-| 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | En cours : Avro et Schema Registry, Oracle (`MERGE`), exactly-once (transactions et preuves sur `prelevement-service`), `impaye-service` (rejets, relance) et Kafka Streams (`stats-service`, [kafka-streams.md](docs/kafka-streams.md)) réalisés ; outbox vu sur H2 en phase 3, pas encore sur Oracle |
+| 6 | Outbox Oracle, Avro / Schema Registry, exactly-once, Kafka Streams | En cours : Avro et Schema Registry, Oracle (`MERGE`), exactly-once (transactions et preuves sur `prelevement-service`), `impaye-service` (rejets, relance) et Kafka Streams (`stats-service`, [kafka-streams.md](docs/kafka-streams.md)) réalisés ; outbox de `cotisation-service` migré sur Oracle ([phase-3-outbox.md](docs/phase-3-outbox.md), sections 11 et 12) |
 | 7 | Tests d'intégration complets, éventuellement ELK | En cours (`@EmbeddedKafka`, registre factice et Oracle Testcontainers sur les trois premiers services ; `stats-service` : `TopologyTestDriver` seulement, pas de test avec broker) ; ELK à faire |
 | Hors plan initial | Kafka Connect : JDBC Sink de `prelevements.resultats` vers PostgreSQL, par configuration seule | Réalisée, vérifiée à la main (connecteur actif, 4 lignes écrites) ; rejeu (idempotence) non prouvé : [kafka-connect.md](docs/kafka-connect.md) |
 
@@ -198,7 +198,7 @@ Onze études, chacune avec son journal ou son guide (constaté, déduit, non vé
 | Étude | Contenu | Journal |
 |---|---|---|
 | Consommateur idempotent | Décision de prélèvement écrite une seule fois par `idEvenement` (clé primaire, doublon absorbé) | [phase-3-idempotence.md](docs/phase-3-idempotence.md) |
-| Outbox | Cotisation enregistrée en base, publiée par un relais planifié, au moins une fois | [phase-3-outbox.md](docs/phase-3-outbox.md) |
+| Outbox | Cotisation enregistrée en base (H2 le 18/11, Oracle depuis le 24/11/2026), publiée par un relais planifié, au moins une fois | [phase-3-outbox.md](docs/phase-3-outbox.md) |
 | Retry topic | Retries non bloquants avec `@RetryableTopic`, cohabitation avec le DLT, perte de l'ordre par clé | [phase-3-retry-topic.md](docs/phase-3-retry-topic.md) |
 | Avro et Schema Registry | Schéma `CotisationEmise` enregistré dans le registre (port 8082), sérialisation Avro de bout en bout | [phase-4-avro-schema-registry.md](docs/phase-4-avro-schema-registry.md) |
 | Oracle (`prelevement-service`) | H2 remplacé par Oracle Free 23ai ; tests sur Oracle dans un conteneur (Testcontainers) ; découvertes sur `Instant` et ORA-12899 | [phase-5-etape-1-oracle.md](docs/phase-5-etape-1-oracle.md) |
