@@ -5,6 +5,8 @@ import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.Outbox;
 import io.github.abdeljalil59.mutuelle.cotisation.domain.Cotisation;
 import io.github.abdeljalil59.mutuelle.events.CotisationEmise;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.jdbc.core.simple.JdbcClient;
@@ -32,7 +34,8 @@ public class OutboxJdbc implements Outbox {
                 .param(topic)
                 .param(cotisation.idAdherent())
                 .param(jsonMapper.writeValueAsString(evenement))
-                .param(cotisation.emiseLe())
+                // ojdbc17 refuse un Instant en paramètre (ORA-17004, constaté) : on lie un OffsetDateTime UTC.
+                .param(OffsetDateTime.ofInstant(cotisation.emiseLe(), ZoneOffset.UTC))
                 .update();
     }
 
@@ -54,7 +57,7 @@ public class OutboxJdbc implements Outbox {
     @Override
     public void marquerEnvoye(UUID idEvenement, Instant envoyeLe) {
         jdbcClient.sql("UPDATE outbox SET envoye_le = ? WHERE id_evenement = ?")
-                .param(envoyeLe)
+                .param(OffsetDateTime.ofInstant(envoyeLe, ZoneOffset.UTC))
                 .param(idEvenement.toString())
                 .update();
     }
