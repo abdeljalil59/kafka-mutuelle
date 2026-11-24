@@ -3,15 +3,19 @@ package io.github.abdeljalil59.mutuelle.cotisation;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import io.github.abdeljalil59.mutuelle.cotisation.application.EmettreCotisation;
 import io.github.abdeljalil59.mutuelle.cotisation.application.RelayerOutbox;
 import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.Outbox;
+import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.PublicationCotisation;
+import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.PublicationImpossibleException;
 import io.github.abdeljalil59.mutuelle.cotisation.domain.Cotisation;
 import io.github.abdeljalil59.mutuelle.events.avro.CotisationEmise;
 import java.math.BigDecimal;
@@ -19,10 +23,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -49,6 +56,7 @@ class OutboxTransactionIntegrationTest extends OracleIntegrationTest {
     private static final String TOPIC = "cotisations.emises";
     private static final UUID ID_EVENEMENT_1 = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000001");
     private static final UUID ID_EVENEMENT_2 = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000002");
+    private static final UUID ID_EVENEMENT_3 = UUID.fromString("aaaaaaaa-0000-0000-0000-000000000003");
     private static final Instant T1 = Instant.parse("2026-11-16T10:00:00Z");
 
     @Autowired
@@ -65,6 +73,9 @@ class OutboxTransactionIntegrationTest extends OracleIntegrationTest {
 
     @MockitoSpyBean
     private Outbox outbox;
+
+    @MockitoSpyBean
+    private PublicationCotisation publication;
 
     // Les tests partagent le même contexte (donc la même base) : chacun repart d'une outbox vide.
     @BeforeEach
@@ -123,6 +134,51 @@ class OutboxTransactionIntegrationTest extends OracleIntegrationTest {
             assertThat(messages.get(0).value().getIdEvenement()).isEqualTo(ID_EVENEMENT_2);
             verify(outbox, times(2)).marquerEnvoye(eq(ID_EVENEMENT_2), any());
         }
+    }
+
+    // Le relais lit et marque dans une transaction (une par passage). Sans @Transactional : [false, false].
+    @Test
+    void le_relais_lit_et_marque_dans_une_transaction() {
+        List<Boolean> transactionActive = new ArrayList<>();
+        doAnswer(appel -> {
+            transactionActive.add(TransactionSynchronizationManager.isActualTransactionActive());
+            return appel.callRealMethod();
+        }).when(outbox).lireNonEnvoyes(anyInt());
+        doAnswer(appel -> {
+            transactionActive.add(TransactionSynchronizationManager.isActualTransactionActive());
+            return appel.callRealMethod();
+        }).when(outbox).marquerEnvoye(any(), any());
+        outbox.enregistrer(new Cotisation("adh-relais", new BigDecimal("10.00"), T1), ID_EVENEMENT_1);
+
+        assertThat(relayerOutbox.relayer()).isEqualTo(1);
+
+        LOGGER.info("PREUVE transaction active pendant la lecture et le marquage du relais : {}", transactionActive);
+        assertThat(transactionActive).containsExactly(true, true);
+        assertThat(estEnvoye("adh-relais")).isTrue();
+    }
+
+    // Échec au milieu du lot : le premier événement est publié ET marqué, le deuxième échoue, le troisième n'est pas
+    // tenté. Avec @Transactional sans noRollbackFor, la transaction annulerait le marquage du premier.
+    @ParameterizedTest
+    @MethodSource("echecsDuLot")
+    void valide_les_evenements_publies_avant_l_echec_du_lot(RuntimeException echec) {
+        outbox.enregistrer(new Cotisation("adh-a", new BigDecimal("10.00"), T1), ID_EVENEMENT_1);
+        outbox.enregistrer(new Cotisation("adh-b", new BigDecimal("20.00"), T1.plusSeconds(1)), ID_EVENEMENT_2);
+        outbox.enregistrer(new Cotisation("adh-c", new BigDecimal("30.00"), T1.plusSeconds(2)), ID_EVENEMENT_3);
+        doThrow(echec).when(publication).publier(eq(TOPIC), eq("adh-b"), any());
+
+        assertThatThrownBy(() -> relayerOutbox.relayer()).isSameAs(echec);
+
+        assertThat(estEnvoye("adh-a")).isTrue();
+        assertThat(estEnvoye("adh-b")).isFalse();
+        assertThat(estEnvoye("adh-c")).isFalse();
+        verify(publication, never()).publier(eq(TOPIC), eq("adh-c"), any());
+    }
+
+    static Stream<RuntimeException> echecsDuLot() {
+        return Stream.of(
+                new PublicationImpossibleException("broker injoignable", new RuntimeException()),
+                new IllegalArgumentException("payload non convertible"));
     }
 
     private int nombreDeLignes() {
