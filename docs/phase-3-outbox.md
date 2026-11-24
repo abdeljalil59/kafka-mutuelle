@@ -1,6 +1,6 @@
 # Phase 3 : outbox transactionnel et relais (`cotisation-service`)
 
-> **Mise à jour du 24/11/2026.** L'outbox de `cotisation-service` est passé de H2 à Oracle Free 23ai (`schema.sql`, variables `COTISATION_DB_URL`, `COTISATION_DB_USER`, `COTISATION_DB_PASSWORD`). **L'outbox est le seul état du service** : il n'a pas de table `cotisation`, la transaction ne porte qu'un `INSERT`. Ce journal décrit l'état du 18/11/2026 (H2) ; les sections 3, 4, 7, 8 et 9 sont mises à jour, la section 10 reste le relevé daté du 18/11 sur H2, la section 11 consigne la migration vers Oracle et la section 12 l'index de lecture du relais.
+> **Mise à jour du 24/11/2026.** L'outbox de `cotisation-service` est passé de H2 à Oracle Free 23ai (`schema.sql`, variables `COTISATION_DB_URL`, `COTISATION_DB_USER`, `COTISATION_DB_PASSWORD`). **L'outbox est le seul état du service** : il n'a pas de table `cotisation`, la transaction ne porte qu'un `INSERT`. Ce journal décrit l'état du 18/11/2026 (H2) ; les sections 3, 4, 7, 8 et 9 sont mises à jour, la section 10 reste le relevé daté du 18/11 sur H2, la section 11 consigne la migration vers Oracle, la section 12 l'index de lecture du relais et la section 13 la démonstration sur l'Oracle local (24/11/2026).
 
 Environnement (18/11/2026, heure locale +01:00) : Spring Boot 4.1.2, spring-kafka 4.1.2, kafka-clients 4.2.2, H2 2.4.240 (versions : voir [versions.md](versions.md)). Producteur avant l'outbox : [phase-1-producteur.md](phase-1-producteur.md). Consommateur idempotent : [phase-3-idempotence.md](phase-3-idempotence.md). Environnement de la migration Oracle (24/11/2026) : section 11.
 
@@ -75,11 +75,11 @@ CREATE INDEX IF NOT EXISTS idx_outbox_a_envoyer ON outbox (envoye_le, cree_le, i
 | Format JSON | 4 propriétés ; `montant` à 50.00 ; `emiseLe` en chaîne ISO-8601 ; identique avec un `JsonMapper` nu et avec celui de Spring | | Autres réglages des deux mappers ; lecture par `prelevement-service` dans un test automatisé (relevée en démonstration 3, section 10) |
 | Transaction | Active via le cas d'usage, inactive en appel direct ; 2 lignes validées | | Rollback conjoint avec une table métier (inexistante) |
 | Relais | Le relais planifié publie puis marque ; arrêt du lot au premier échec | Latence max = `delai-relais-ms` + temps du lot | Relais sous charge ; `catch` de `RelaiOutbox` |
-| Au moins une fois | Doublon par échec de marquage simulé (mêmes `idEvenement` et payload) ; relevé en démonstration 3 : republication provoquée par un `UPDATE`, doublon ignoré par `prelevement-service` | Un vrai plantage donne le même résultat | Vrai plantage de processus |
+| Au moins une fois | Doublon par échec de marquage simulé (mêmes `idEvenement` et payload) ; relevé en démonstration 3 : republication provoquée par un `UPDATE`, doublon ignoré par `prelevement-service` (relevé du 18/11 sur le code d'alors : le journal « doublon ignoré » n'existe plus, section 13) ; rejoué sur Oracle le 24/11/2026 : une seule ligne en base, un second résultat publié, compteur à 1 (section 13) | Un vrai plantage donne le même résultat | Vrai plantage de processus |
 | Multi-instance | | Deux instances publieraient les mêmes lignes | `FOR UPDATE SKIP LOCKED` |
 | Purge | | La table grossit | Purge des lignes envoyées |
-| Broker | Preuves automatisées sur le broker embarqué 4.2.2 ; publication vers le broker 4.4.0 du compose relevée en démonstrations 2 et 3 (section 10) | | Broker réellement arrêté (la démonstration 2 vise un port fictif) |
-| Oracle | Conteneur 23.26.4 : `OutboxJdbcTest`, flux complet, transaction, doublon par échec de marquage (lancement 7, 56 tests verts) | | Oracle local 23.4.0.24.05 : aucun test ; démonstration en direct ; `ORA-02014` sur 23.26.4 (section 11) |
+| Broker | Preuves automatisées sur le broker embarqué 4.2.2 ; publication vers le broker 4.4.0 du compose relevée en démonstrations 2 et 3 (section 10, 18/11) ; broker réellement arrêté puis rétabli (`docker stop kafka`, `docker start kafka`), relais rattrapant (section 13, 24/11/2026) | | |
+| Oracle | Conteneur 23.26.4 : `OutboxJdbcTest`, flux complet, transaction, doublon par échec de marquage (lancement 7, 56 tests verts) ; Oracle local 23.4.0.24.05 : démonstration en direct, 3 scénarios, types des colonnes et colonnes de l'index relevés (24/11/2026, section 13) | | Oracle local : aucun test automatisé ; `ORA-02014` non vérifié sur 23.26.4 (section 11) |
 
 ## 9. Notes et limites
 - **Latence** : un événement est publié au passage suivant, soit jusqu'à 10 s plus le temps de publier le lot. **Une seule instance**, pas de purge.
@@ -87,10 +87,10 @@ CREATE INDEX IF NOT EXISTS idx_outbox_a_envoyer ON outbox (envoye_le, cree_le, i
 - **`cle` limitée à 100 caractères** : un `idAdherent` plus long fait échouer l'`INSERT` ; **déduit** : 500, `GestionErreursRest` ne traite pas les erreurs de base (non testé ici).
 - **Gestionnaire 503** : plus atteint depuis le cas d'usage (il ne publie plus) ; conservé et testé avec un mock.
 - **Ordre par clé** : celui de `cree_le` (horloge du service). Deux transactions concurrentes du même adhérent pourraient être validées dans l'ordre inverse (déduit, non exercé).
-- **Démonstrations** : les trois démonstrations prévues (relais coupé, broker injoignable, doublon par replay) ont été exécutées par l'utilisateur le 18/11/2026 ; relevés et commandes à la section 10.
+- **Démonstrations** : les trois démonstrations prévues (relais coupé, broker injoignable, doublon par replay) ont été exécutées par l'utilisateur le 18/11/2026 ; relevés et commandes à la section 10. Les trois mêmes scénarios ont été rejoués sur Oracle le 24/11/2026 : section 13.
 
 ## 10. Démonstrations live
-**Démonstrations du 18/11/2026 sur une base H2 fichier ; relevés conservés tels quels.** Exécutées par l'utilisateur le 18/11/2026 (heure locale +01:00) : jar de `cotisation-service` construit depuis le dépôt (code de production inchangé depuis `50eaf5c`), base H2 **fichier** `cotisation-service/target/demo-outbox` (`AUTO_SERVER=TRUE`), broker `apache/kafka:4.4.0` du compose. **Tout ce qui suit est un relevé de l'utilisateur** : je n'ai pas rejoué les services, et les sorties brutes (logs, `curl`, console) ne sont pas reproduites ici. Les commandes de la dernière sous-section sont reconstituées à partir du plan (section 9) et du relevé, et n'ont pas été rejouées non plus.
+**Démonstrations du 18/11/2026 sur une base H2 fichier ; relevés conservés tels quels.** Les démonstrations du 24/11/2026 sur Oracle sont à la section 13 ; la démonstration 3 ci-dessous n'est plus reproductible telle quelle (le code d'idempotence a changé le 19/11/2026, section 13). Exécutées par l'utilisateur le 18/11/2026 (heure locale +01:00) : jar de `cotisation-service` construit depuis le dépôt (code de production inchangé depuis `50eaf5c`), base H2 **fichier** `cotisation-service/target/demo-outbox` (`AUTO_SERVER=TRUE`), broker `apache/kafka:4.4.0` du compose. **Tout ce qui suit est un relevé de l'utilisateur** : je n'ai pas rejoué les services, et les sorties brutes (logs, `curl`, console) ne sont pas reproduites ici. Les commandes de la dernière sous-section sont reconstituées à partir du plan (section 9) et du relevé, et n'ont pas été rejouées non plus.
 
 ### Prérequis et pièges rencontrés
 
@@ -171,7 +171,7 @@ docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server :9
 Environnement : Oracle Free 23ai ; tests sur le conteneur `gvenzl/oracle-free:23.26.4-slim-faststart` (Testcontainers) ; Oracle local de l'utilisateur en 23.4.0.24.05 ; `ojdbc17` (version gérée par le BOM de Spring Boot). Résultat : `mvn -B -pl cotisation-service -am test` : 56 tests pour `cotisation-service`, `BUILD SUCCESS` (lancement 7 du 24/11/2026, journal non versionné ; conteneur démarré en 2 min 17 s).
 
 ### Ce qui change (constaté dans les sources)
-- `application.yml` : `spring.datasource.url|username|password` = `${COTISATION_DB_URL:jdbc:oracle:thin:@localhost:1522/freepdb1}`, `${COTISATION_DB_USER:kafka_mutuelle}`, `${COTISATION_DB_PASSWORD:…}` (valeurs par défaut de développement, les mêmes que pour `prelevement-service` ; la valeur par défaut du mot de passe n'est pas reproduite ici, voir `application.yml`) ; `driver-class-name: oracle.jdbc.OracleDriver` ; `spring.sql.init.mode: always`. **Non testé sans `always`** : le commentaire équivalent de `prelevement-service/src/main/resources/application.yml` (lignes 42 à 45, « Oracle n'est pas une base embarquée : sans "always", schema.sql ne serait pas appliqué ») n'est pas non plus sourcé dans la documentation de Spring Boot.
+- `application.yml` : `spring.datasource.url|username|password` = `${COTISATION_DB_URL:jdbc:oracle:thin:@localhost:1522/freepdb1}`, `${COTISATION_DB_USER:kafka_mutuelle}`, `${COTISATION_DB_PASSWORD:…}` (valeurs par défaut de développement, les mêmes que pour `prelevement-service` ; les commandes `sqlplus` de la section 13 les reprennent) ; `driver-class-name: oracle.jdbc.OracleDriver` ; `spring.sql.init.mode: always`. **Non testé sans `always`** : le commentaire équivalent de `prelevement-service/src/main/resources/application.yml` (lignes 42 à 45, « Oracle n'est pas une base embarquée : sans "always", schema.sql ne serait pas appliqué ») n'est pas non plus sourcé dans la documentation de Spring Boot.
 - `schema.sql` : schéma Oracle (section 3), appliqué à chaque démarrage. **Constaté** : `CREATE TABLE IF NOT EXISTS` et `CREATE INDEX IF NOT EXISTS` passent sans erreur sur 23.26.4 (aucun `ORA-` dans le lancement 7, où chaque contexte réapplique le script ; journal non versionné) ; relevé de l'utilisateur : acceptés aussi sur 23.4.0.24.05.
 - **Une table existante n'est pas modifiée** (déduit du sens de `IF NOT EXISTS`, non testé) : une ancienne table `OUTBOX` aux types `TIMESTAMP WITH TIME ZONE` resterait telle quelle et l'index se poserait dessus (section 12). Elle est à supprimer avant le premier démarrage.
 - La dépendance H2 est retirée : aucune référence restante dans `cotisation-service/src` (recherche faite avant le retrait).
@@ -228,3 +228,83 @@ Image `gvenzl/oracle-free:23.26.4-slim-faststart`, conteneur jetable ; test jeta
 - Le plan de la **vraie** table `outbox` avec la liaison de `OutboxJdbc` n'est pas mesuré : seule la copie `TIMESTAMP WITH LOCAL TIME ZONE` de la sonde l'est (même DDL).
 - Le coût de lecture suit l'**arriéré**, pas la taille du lot (41 lectures pour 500 lignes en attente, 383 pour 5 000).
 - **Compromis de l'index** : il couvre aussi les lignes déjà envoyées (la table n'est pas purgée), donc il croît avec elle ; chaque `marquerEnvoye` déplace l'entrée de l'index (la ligne quitte la zone `envoye_le` NULL).
+
+## 13. Démonstration sur Oracle local (24/11/2026)
+
+Démonstration exécutée le 24/11/2026 (heure locale +01:00) sur l'Oracle local 23.4.0.24.05, avec `kafka` et `schema-registry` du compose ; les sorties sont reproduites par extraits. Trois terminaux : T1 (`cotisation-service`), T2 (commandes), T3 (`prelevement-service`). Les commandes `sqlplus` utilisent les valeurs de développement de l'`application.yml`.
+
+### Préparation
+- **Constaté** : mémoire disponible avant : 1 978 Mo (1 816 Mo avant le scénario 3). Avant le premier démarrage, `SELECT … FROM user_tab_columns WHERE table_name = 'OUTBOX'` : « aucune ligne sélectionnée » (table absente). `CREATE TABLE IF NOT EXISTS` et `CREATE INDEX IF NOT EXISTS` de `schema.sql` ont été acceptés sur 23.4 au premier démarrage : la table et l'index existent ensuite, et aucune erreur n'a empêché le service de démarrer et d'écrire.
+- **Constaté (relevé après les trois scénarios, `user_tab_columns` et `user_ind_columns`, 6 lignes pour la table)** : `ID_EVENEMENT`, `TOPIC`, `CLE` en `VARCHAR2`, `PAYLOAD` en `CLOB`, `CREE_LE` et `ENVOYE_LE` en `TIMESTAMP(6) WITH LOCAL TIME ZONE`. Index `IDX_OUTBOX_A_ENVOYER` : position 1 `ENVOYE_LE`, position 2 `CREE_LE`, position 3 `ID_EVENEMENT` (colonnes brutes, sans colonne virtuelle `SYS_NC…`) ; `PK_OUTBOX` : position 1 `ID_EVENEMENT`. C'est exactement ce que `schema.sql` déclare et ce que vérifie `OutboxJdbcTest.l_index_de_lecture_porte_les_colonnes_dans_l_ordre_du_relais`.
+- **Non vérifié** : les longueurs des `VARCHAR2` (la sortie de `sqlplus` a été coupée par la largeur de colonne) ; le plan d'exécution sur cet Oracle (non relevé).
+```powershell
+mvn -B package -pl cotisation-service -am -DskipTests
+```
+```powershell
+(Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory).AvailableMBytes
+```
+Lecture de l'outbox :
+```powershell
+@("SET LINESIZE 200", "SELECT id_evenement, cle, cree_le, envoye_le FROM outbox ORDER BY cree_le;") | sqlplus -s kafka_mutuelle/kafka_mutuelle@localhost:1522/freepdb1
+```
+Lecture du topic (valeurs Avro binaires ; clé, partition et offset lisibles) :
+```powershell
+docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic cotisations.emises --from-beginning --timeout-ms 10000 --formatter-property print.key=true --formatter-property print.partition=true --formatter-property print.offset=true
+```
+
+### Scénario 1 : relais désactivé
+T1 :
+```powershell
+java -jar cotisation-service/target/cotisation-service-0.1.0-SNAPSHOT.jar --mutuelle.cotisation.outbox.relais-actif=false
+```
+T2 :
+```powershell
+curl.exe -s -w "`n%{http_code}" -X POST http://localhost:8081/cotisations -H "Content-Type: application/json" -d "@cotisation-demo.json"
+```
+- **Constaté** : HTTP 201, corps `{"idAdherent":"ADH-DEMO-01","montant":42.50,"emiseLe":"2026-11-24T14:45:20.711919900Z"}`. `OUTBOX` : `id_evenement` 6f554e03-b580-4eec-9d7f-304513ab4cb5, `cle` ADH-DEMO-01, `CREE_LE` 24/11/26 15:45:20,711920, `ENVOYE_LE` vide (une seule lecture). La ligne a ensuite été supprimée (`DELETE FROM outbox; COMMIT;`, 1 ligne, validation effectuée), pour que le relais du scénario 2 ne la publie pas.
+- **Constaté indirectement** : l'identifiant 6f554e03 n'apparaît pas dans le relevé complet de `cotisations.emises` fait ensuite (scénario 2).
+- **Non vérifié** : le topic n'a pas été relevé avant et après ce scénario ; la lecture de l'outbox 20 s plus tard n'a pas été capturée (`ENVOYE_LE` toujours vide : déduit du relais désactivé, non constaté).
+- **(d) Fuseau (constaté)** : `CREE_LE` s'affiche à 15:45:20,711920 alors que `emiseLe` vaut 14:45:20.7119199Z. **Déduit** : même instant, affiché dans le fuseau de la session Oracle (+01:00, Europe/Paris) ; une valeur `TIMESTAMP WITH LOCAL TIME ZONE` est restituée dans le fuseau de la session (documentation d'Oracle non consultée). Les nanosecondes sont arrondies à la microseconde (711919900 ns affichées 711920 µs).
+
+### Scénario 2 : Kafka réellement arrêté, puis rétabli
+T1 :
+```powershell
+java -jar cotisation-service/target/cotisation-service-0.1.0-SNAPSHOT.jar
+```
+T2 :
+```powershell
+docker stop kafka
+```
+T2 (même `curl.exe` que ci-dessus), puis :
+```powershell
+docker start kafka
+```
+- **Constaté** : `docker stop kafka` affiche `kafka`. Le `POST` répond **201** pendant l'arrêt (`emiseLe` 2026-11-24T14:47:02.835477500Z). `OUTBOX` : `id_evenement` e0ae7c52-44cf-4607-8479-b0b13cd5f3af, `CREE_LE` 24/11/26 15:47:02,835478, `ENVOYE_LE` vide.
+- **Constaté (journal de T1, 15:47)** : producteur déconnecté de `localhost:9092` dès 15:47:19, des dizaines de lignes INFO `Rebootstrapping with [localhost/127.0.0.1:9092]` et WARN `Connection to node -1 … could not be established. Node may not be available.` ; 15:47:31.197 ERROR `LoggingProducerListener` : `Exception thrown when sending a message with key='ADH-DEMO-01' and payload='{"idEvenement": "e0ae7c52-…` to topic cotisations.emises: `org.apache.kafka.common.errors.TimeoutException: Topic cotisations.emises not present in metadata after 5000 ms.` ; 15:47:31.218 WARN `RelaiOutbox` : `outbox : publication impossible, nouvel essai au prochain passage : Échec de la publication de l'événement de ADH-DEMO-01`. Les INFO de reconnexion reprennent à 15:47:41.257. 15:47:45.151 `Cluster ID: 4L6g3nShT-eMCtK--X86sw` (Kafka de retour) ; 15:47:45.281 `ProducerId set to 5000 with epoch 0` ; 15:47:48.110 INFO `RelaiOutbox` : `outbox : 1 événement(s) publié(s)` (un seul : la table avait été vidée).
+- **Constaté (topic, relevé complet vers 15:48)** : partition 1, offset 7, clé ADH-DEMO-01, valeur Avro commençant par l'identifiant e0ae7c52-… ; les offsets 0 à 6 de la partition 1 sont intacts après `docker stop` puis `docker start` (données conservées) ; 6f554e03 est absent.
+- **Déduit** : le passage suivant du relais était à 15:47:41 (délai fixe de 10 s). `ENVOYE_LE` n'a **pas** été lu directement après la publication ; entre 15:47:48 et le replay du scénario 3 (15:51:38, environ 230 s, une vingtaine de passages), le topic ne contient qu'un exemplaire (offset 7) : la ligne a donc été marquée au premier passage.
+- **Non vérifié** : l'heure du `docker start kafka` n'a pas été relevée, donc le délai entre le retour du broker et la publication n'est pas mesuré.
+- **(a) Message trompeur** : `Topic cotisations.emises not present in metadata after 5000 ms` suggère un topic absent. Le topic existait (offsets 0 à 6 intacts) : la cause réelle est le broker injoignable, que seules les lignes WARN `Connection to node -1` montrent.
+- **(b) Une panne, deux lignes** : une même tentative produit un ERROR de `LoggingProducerListener` (spring-kafka) puis, 21 ms plus tard, un WARN de `RelaiOutbox`.
+- **(c) Bruit** : les INFO `Rebootstrapping` se répètent par dizaines pendant l'arrêt et noient les deux lignes utiles.
+
+### Scénario 3 : replay et doublon
+T3 (avant la remise à NULL) :
+```powershell
+mvn -pl prelevement-service spring-boot:run
+```
+T2 :
+```powershell
+@("UPDATE outbox SET envoye_le = NULL WHERE id_evenement = (SELECT id_evenement FROM outbox WHERE cree_le = (SELECT MAX(cree_le) FROM outbox));", "COMMIT;") | sqlplus -s kafka_mutuelle/kafka_mutuelle@localhost:1522/freepdb1
+```
+- **Constaté** : mémoire avant : 1 816 Mo. Journal de `prelevement-service` : 15:50:58 `Invoking InitProducerId … transactionalId=tx-prelevement-0`, `ProducerId set to 3002 with epoch 7` ; 15:50:59.102 `CotisationEmiseListener` : `partition=1 offset=7 cle=ADH-DEMO-01 idEvenement=e0ae7c52-44cf-4607-8479-b0b13cd5f3af montant=42.50 decision=ACCEPTE`.
+- **Constaté** : `UPDATE` : « 1 ligne mise à jour », validation effectuée. `OUTBOX` : `CREE_LE` 24/11/26 15:47:02,835478 (inchangé), `ENVOYE_LE` 24/11/26 15:51:38,299211. Journal : 15:51:38.313 `CotisationEmiseListener` : `partition=1 offset=8 … idEvenement=e0ae7c52-44cf-4607-8479-b0b13cd5f3af … decision=ACCEPTE` (14 ms après le marquage). Le fichier de journal s'arrête là : **aucune ligne « doublon »**.
+- **Constaté** : `cotisations.emises` : deux messages de même clé et même `idEvenement`, partition 1, offsets 7 et 8. `DECISION_PRELEVEMENT` : `COUNT` = 1 pour cet `idEvenement` ; `id_adherent` ADH-DEMO-01, `montant` 42,5, `decision` ACCEPTE, `decide_le` 24/11/26 14:50:58,861613 +00:00 (la **première** décision ; ce type, `TIMESTAMP WITH TIME ZONE`, garde le décalage +00:00, contrairement à `OUTBOX`, voir le scénario 1). Compteur Prometheus (`curl.exe http://localhost:8083/actuator/prometheus`) : `prelevement_doublons_ignores_total 1.0`. `prelevements.resultats` (`--from-beginning`, filtre sur e0ae7c52) : **deux** messages, même clé, partition 1, offsets 2 et 4, valeurs Avro binaires commençant par e0ae7c52-… et dont les fins d'octets diffèrent.
+- **Déduit, non vérifié** : l'offset 3 manquant est un marqueur de commit de transaction (le producteur de `prelevement-service` est transactionnel, `transactionalId=tx-prelevement-0`, alors que `cotisations.emises`, produit sans transaction, a des offsets consécutifs) ; vérifiable avec `kafka-dump-log`, non fait. **Déduit** : les fins d'octets diffèrent parce que `decideLe` est recalculé par `clock.instant()` à chaque traitement (`TraiterDemandePrelevement.java:34`) ; non vérifié par décodage Avro.
+- **(e) La démonstration 3 du 18/11 n'est plus reproductible** : la ligne `doublon ignoré idEvenement=…` a été supprimée par `88b9ac2` (19/11/2026 13:51, `MERGE`), après le relevé du 18/11 (section 10, conservé tel quel). **Constaté (code lu)** : `JournalDecisionsJdbc.java:17-23` (`MERGE … WHEN NOT MATCHED THEN INSERT`, sans `WHEN MATCHED`), `:57-65` (résultat 0 = doublon, seul signal : le compteur `prelevement.doublons.ignores` ; la classe n'a pas de `Logger`). Le seul INFO du listener (`CotisationEmiseListener.java:34-36`) est émis pour chaque message, doublon compris.
+- **(f) Un doublon produit un second résultat** : `TraiterDemandePrelevement.java:35-36` appelle `enregistrer` puis `publier` sans condition (commentaires `:27-30`). Le résultat republié a le même `idEvenement` (`PublicationResultats.java:10` : republier la même décision « donne le même `idEvenement`, que le consommateur aval utilise pour dédoublonner »). Les deux messages de `prelevements.resultats` le confirment. **Constaté (code lu)** : `stats-service` ne compte un `idEvenement` qu'une fois ([kafka-streams.md](kafka-streams.md), lignes 36 et 73) ; `impaye-service` ignore un `idEvenement` déjà enregistré (`PersistanceImpayeJdbc.java:32-49` : `INSERT` et capture de `DuplicateKeyException`, compteur `impaye.doublons.ignores` ; contrainte `uq_impaye_id_evenement`, `schema.sql:15`). **Non exercé en direct** : ces deux services n'ont pas tourné pendant cette démonstration ; `impaye-service` n'enregistre que les rejets (README, tableau des modules) et la décision de la démonstration était ACCEPTE.
+
+### Ce que cette démonstration ne prouve pas
+- **Un vrai plantage** entre l'accusé du broker et le marquage : le replay est provoqué par un `UPDATE` manuel.
+- **Le plan d'exécution** de la requête du relais sur la vraie table `outbox` : non relevé (section 12).
+- **Plusieurs instances du relais** et `SKIP LOCKED` (section 11).
