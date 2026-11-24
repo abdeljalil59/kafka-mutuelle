@@ -143,7 +143,7 @@ class OutboxTransactionIntegrationTest extends OracleIntegrationTest {
         doAnswer(appel -> {
             transactionActive.add(TransactionSynchronizationManager.isActualTransactionActive());
             return appel.callRealMethod();
-        }).when(outbox).lireNonEnvoyes(anyInt());
+        }).when(outbox).reserverNonEnvoyes(anyInt());
         doAnswer(appel -> {
             transactionActive.add(TransactionSynchronizationManager.isActualTransactionActive());
             return appel.callRealMethod();
@@ -179,6 +179,27 @@ class OutboxTransactionIntegrationTest extends OracleIntegrationTest {
         return Stream.of(
                 new PublicationImpossibleException("broker injoignable", new RuntimeException()),
                 new IllegalArgumentException("payload non convertible"));
+    }
+
+    // Échec au milieu d'un lot réservé : l'événement déjà marqué le reste (noRollbackFor), et les deux suivants, dont
+    // les verrous sont libérés par la validation, sont de nouveau réservables au passage suivant.
+    @Test
+    void l_evenement_en_echec_redevient_reservable_au_passage_suivant() {
+        outbox.enregistrer(new Cotisation("adh-a", new BigDecimal("10.00"), T1), ID_EVENEMENT_1);
+        outbox.enregistrer(new Cotisation("adh-b", new BigDecimal("20.00"), T1.plusSeconds(1)), ID_EVENEMENT_2);
+        outbox.enregistrer(new Cotisation("adh-c", new BigDecimal("30.00"), T1.plusSeconds(2)), ID_EVENEMENT_3);
+        doThrow(new PublicationImpossibleException("broker injoignable", new RuntimeException()))
+                .doCallRealMethod()
+                .when(publication).publier(eq(TOPIC), eq("adh-b"), any());
+
+        assertThatThrownBy(() -> relayerOutbox.relayer()).isInstanceOf(PublicationImpossibleException.class);
+        assertThat(estEnvoye("adh-a")).isTrue();
+        assertThat(estEnvoye("adh-b")).isFalse();
+        assertThat(estEnvoye("adh-c")).isFalse();
+
+        assertThat(relayerOutbox.relayer()).isEqualTo(2);
+        assertThat(estEnvoye("adh-b")).isTrue();
+        assertThat(estEnvoye("adh-c")).isTrue();
     }
 
     private int nombreDeLignes() {

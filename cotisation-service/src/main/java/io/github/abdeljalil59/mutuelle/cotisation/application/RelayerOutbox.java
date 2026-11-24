@@ -33,7 +33,7 @@ public class RelayerOutbox {
     // l'idempotence du consommateur).
     @Transactional(noRollbackFor = {PublicationImpossibleException.class, IllegalArgumentException.class})
     public int relayer() {
-        List<EvenementOutbox> evenements = outbox.lireNonEnvoyes(tailleLot);
+        List<EvenementOutbox> evenements = outbox.reserverNonEnvoyes(tailleLot);
         for (EvenementOutbox evenement : evenements) {
             publication.publier(evenement.topic(), evenement.cle(), evenement.payload());
             outbox.marquerEnvoye(evenement.idEvenement(), clock.instant());

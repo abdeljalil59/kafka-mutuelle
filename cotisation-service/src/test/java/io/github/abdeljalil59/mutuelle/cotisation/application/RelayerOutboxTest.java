@@ -55,7 +55,7 @@ class RelayerOutboxTest {
     void relaie_les_evenements_non_envoyes_dans_l_ordre() {
         EvenementOutbox premier = evenement(ID_EVENEMENT_1, "adh1");
         EvenementOutbox second = evenement(ID_EVENEMENT_2, "adh2");
-        when(outbox.lireNonEnvoyes(TAILLE_LOT)).thenReturn(List.of(premier, second));
+        when(outbox.reserverNonEnvoyes(TAILLE_LOT)).thenReturn(List.of(premier, second));
 
         int relayes = relais().relayer();
 
@@ -73,7 +73,7 @@ class RelayerOutboxTest {
         EvenementOutbox premier = evenement(ID_EVENEMENT_1, "adh1");
         EvenementOutbox second = evenement(ID_EVENEMENT_2, "adh2");
         EvenementOutbox troisieme = evenement(ID_EVENEMENT_3, "adh3");
-        when(outbox.lireNonEnvoyes(TAILLE_LOT)).thenReturn(List.of(premier, second, troisieme));
+        when(outbox.reserverNonEnvoyes(TAILLE_LOT)).thenReturn(List.of(premier, second, troisieme));
         // Mockito en mode strict : l'appel réussi pour adh1 doit être déclaré, sinon il est signalé
         // comme un appel aux arguments différents de ceux du stub d'échec.
         doNothing().when(publication).publier(TOPIC, "adh1", premier.payload());
@@ -92,7 +92,7 @@ class RelayerOutboxTest {
 
     @Test
     void retourne_zero_quand_il_n_y_a_rien_a_relayer() {
-        when(outbox.lireNonEnvoyes(TAILLE_LOT)).thenReturn(List.of());
+        when(outbox.reserverNonEnvoyes(TAILLE_LOT)).thenReturn(List.of());
 
         int relayes = relais().relayer();
 

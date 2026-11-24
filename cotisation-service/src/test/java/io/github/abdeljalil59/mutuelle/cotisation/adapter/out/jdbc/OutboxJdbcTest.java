@@ -2,6 +2,7 @@ package io.github.abdeljalil59.mutuelle.cotisation.adapter.out.jdbc;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
+import static org.assertj.core.api.Assertions.assertThatIllegalStateException;
 
 import io.github.abdeljalil59.mutuelle.cotisation.OracleIntegrationTest;
 import io.github.abdeljalil59.mutuelle.cotisation.application.port.out.EvenementOutbox;
@@ -20,8 +21,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -45,6 +48,7 @@ class OutboxJdbcTest extends OracleIntegrationTest {
     }
 
     private static JdbcClient jdbcClient;
+    private static TransactionTemplate transaction;
     private OutboxJdbc outbox;
 
     @BeforeAll
@@ -52,6 +56,12 @@ class OutboxJdbcTest extends OracleIntegrationTest {
         DataSource base = new DriverManagerDataSource(ORACLE.getJdbcUrl(), ORACLE.getUsername(), ORACLE.getPassword());
         new ResourceDatabasePopulator(new ClassPathResource("schema.sql")).execute(base);
         jdbcClient = JdbcClient.create(base);
+        transaction = new TransactionTemplate(new DataSourceTransactionManager(base));
+    }
+
+    // La réservation exige une transaction (les verrous tiennent jusqu'à sa fin) : chaque appel est validé ici.
+    private List<EvenementOutbox> reserver(int limite) {
+        return transaction.execute(statut -> outbox.reserverNonEnvoyes(limite));
     }
 
     @BeforeEach
@@ -138,7 +148,7 @@ class OutboxJdbcTest extends OracleIntegrationTest {
         outbox.enregistrer(cotisation("adh3", "70.00", T2), ID_EVENEMENT_3);
         outbox.marquerEnvoye(ID_EVENEMENT_2, T3);
 
-        List<EvenementOutbox> evenements = outbox.lireNonEnvoyes(10);
+        List<EvenementOutbox> evenements = reserver(10);
 
         assertThat(evenements).extracting(EvenementOutbox::idEvenement)
                 .containsExactly(ID_EVENEMENT_3, ID_EVENEMENT_1);
@@ -155,7 +165,7 @@ class OutboxJdbcTest extends OracleIntegrationTest {
         outbox.enregistrer(cotisation("adh2", "60.00", T1), ID_EVENEMENT_2);
         outbox.enregistrer(cotisation("adh1", "50.00", T1), ID_EVENEMENT_1);
 
-        assertThat(outbox.lireNonEnvoyes(10)).extracting(EvenementOutbox::idEvenement)
+        assertThat(reserver(10)).extracting(EvenementOutbox::idEvenement)
                 .containsExactly(ID_EVENEMENT_1, ID_EVENEMENT_2);
     }
 
@@ -165,11 +175,29 @@ class OutboxJdbcTest extends OracleIntegrationTest {
         outbox.enregistrer(cotisation("adh2", "60.00", T2), ID_EVENEMENT_2);
         outbox.enregistrer(cotisation("adh3", "70.00", T3), ID_EVENEMENT_3);
 
-        assertThat(outbox.lireNonEnvoyes(1)).extracting(EvenementOutbox::idEvenement)
+        assertThat(reserver(1)).extracting(EvenementOutbox::idEvenement)
                 .containsExactly(ID_EVENEMENT_1);
-        assertThat(outbox.lireNonEnvoyes(2)).extracting(EvenementOutbox::idEvenement)
+        assertThat(reserver(2)).extracting(EvenementOutbox::idEvenement)
                 .containsExactly(ID_EVENEMENT_1, ID_EVENEMENT_2);
-        assertThat(outbox.lireNonEnvoyes(10)).hasSize(3);
+        assertThat(reserver(10)).hasSize(3);
+    }
+
+    @Test
+    void reserve_au_plus_un_evenement_par_cle() {
+        // adh1 a deux événements non envoyés : seul le plus ancien (1) est réservé, avec adh2 (2) ; 3 reste en attente.
+        outbox.enregistrer(cotisation("adh1", "50.00", T1), ID_EVENEMENT_1);
+        outbox.enregistrer(cotisation("adh2", "60.00", T2), ID_EVENEMENT_2);
+        outbox.enregistrer(cotisation("adh1", "70.00", T3), ID_EVENEMENT_3);
+
+        assertThat(reserver(10)).extracting(EvenementOutbox::idEvenement)
+                .containsExactly(ID_EVENEMENT_1, ID_EVENEMENT_2);
+    }
+
+    @Test
+    void refuse_de_reserver_hors_transaction() {
+        assertThatIllegalStateException().isThrownBy(() -> outbox.reserverNonEnvoyes(3))
+                .withMessage("reserverNonEnvoyes doit être appelé dans une transaction : "
+                        + "sans elle, les verrous seraient relâchés avant le marquage");
     }
 
     @Test
@@ -180,7 +208,7 @@ class OutboxJdbcTest extends OracleIntegrationTest {
         outbox.marquerEnvoye(ID_EVENEMENT_1, envoyeLe);
 
         assertThat(lignes()).singleElement().satisfies(ligne -> assertThat(ligne.envoyeLe()).isEqualTo(envoyeLe));
-        assertThat(outbox.lireNonEnvoyes(10)).isEmpty();
+        assertThat(reserver(10)).isEmpty();
     }
 
     @Test
