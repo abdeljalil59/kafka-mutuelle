@@ -2,7 +2,7 @@
 
 Objectif : agréger en temps réel les résultats de prélèvement **par adhérent** (nombre d'acceptés, de rejetés, montant total, dernier événement) et exposer le résultat par une API REST, sans base de données : l'état vit dans un **State Store** local, sauvegardé dans Kafka.
 
-> **Statut.** La logique d'agrégation et la déduplication par `idEvenement` sont prouvées par 30 tests sans broker (`TopologyTestDriver`, registre Avro factice `mock://`). Le service a été **vérifié à la main** contre le broker 4.4.0 et le registre (topics internes créés, `GET /stats` sur un store alimenté, restauration après redémarrage) et la **déduplication a été validée en direct** : un rejeu des offsets laisse les chiffres inchangés (§8 bis). **Non vérifié** : l'origine de la restauration (disque local ou changelog), le comportement exact des requêtes pendant le démarrage, le rôle du cache, le cas hors rétention contre le broker réel (prouvé seulement par un test). Voir §9.
+> **Statut.** La logique d'agrégation et la déduplication par `idEvenement` sont prouvées par 30 tests sans broker (`TopologyTestDriver`, registre Avro factice `mock://`). Le service a été **vérifié à la main** contre le broker 4.4.0 et le registre (topics internes créés, `GET /stats` sur un store alimenté, restauration après redémarrage) et la **déduplication a été validée en direct** : un rejeu des offsets, puis la republication d'un doublon, laissent les chiffres inchangés (§8 bis, §8 ter). **Restauration depuis le changelog en l'absence de dossier d'état local : constatée** (§8 ter B). **Non vérifié** : le cas avec dossier local conservé (réutilisation des checkpoints ; le relevé du 23/11 laisse penser, par déduction, qu'il est lu depuis le disque), le comportement exact des requêtes pendant le démarrage, le rôle du cache, le cas hors rétention contre le broker réel (prouvé seulement par un test). Voir §9.
 
 ## 1. KStream et KTable
 
@@ -105,7 +105,7 @@ Sous Windows, `TopologyTestDriver` journalise `Failed to change permissions for 
 
 ## 8 bis. Constaté en live
 
-Observations faites à la main sur `stats-service` démarré sur l'hôte contre le compose (broker 4.4.0, registre sur 8082). Aucun journal de commandes n'a été conservé : ce sont des relevés, pas des preuves rejouables.
+Observations faites à la main sur `stats-service` démarré sur l'hôte contre le compose (broker 4.4.0, registre sur 8082). Aucun journal de commandes n'a été conservé pour les relevés du 23/11 : ce sont des relevés, pas des preuves rejouables. Les relevés du 24/11/2026 (§8 ter) s'appuient sur des journaux conservés localement, non versionnés.
 
 ### Constaté
 
@@ -140,8 +140,8 @@ Observations faites à la main sur `stats-service` démarré sur l'hôte contre 
 - Les 4 messages initiaux n'ont produit que 2 lignes de changelog, probablement à cause du cache de Kafka Streams, qui fusionne les mises à jour d'une même clé avant le commit.
 - Une agrégation compteur/somme n'est pas idempotente : un rejeu additionne à nouveau. `dernierEvenement` est stable, ce qui suggère un maximum.
 - La sous-topologie 0 est sans état ; la sous-topologie 1 porte le state store (d'après les dossiers `0_x` vides et `1_x` avec `rocksdb`).
-- Les dossiers `rocksdb` datent du premier démarrage : la restauration constatée au redémarrage vient **probablement du disque local** et non du changelog.
-- L'identifiant du client Streams (même valeur dans les logs avant et après redémarrage) est probablement conservé dans `kafka-streams-process-metadata`.
+- Relevé du 23/11 (dossier d'état conservé entre l'arrêt et la relance) : les dossiers `rocksdb` datent du premier démarrage, donc la restauration constatée alors vient **probablement du disque local** et non du changelog (déduit, non tranché par ce relevé). L'autre voie, la restauration depuis le changelog sans dossier local, est **constatée** au §8 ter B.
+- L'identifiant du client Streams (même valeur dans les logs avant et après redémarrage) est probablement conservé dans `kafka-streams-process-metadata`. Le 24/11, après suppression du dossier, le journal indique « No process id found on disk, got fresh process id … » ; aucun lancement témoin sans suppression n'a été fait (déduit, non vérifié).
 - La suppression manuelle du dossier d'état (dernière puce « Constaté ») a eu lieu **après** que l'outil de réinitialisation a supprimé le changelog et remis les offsets à 0 : l'état a donc été recalculé depuis le topic source, et non restauré depuis le changelog. Elle ne tranche pas l'origine de la restauration.
 - Un `put` hors rétention est écrit dans le changelog du `WindowStore` (P3a) ; on ne sait pas s'il est conservé dans le store.
 - `exactly_once_v2` ne remplacerait pas la déduplication : relire des messages (remise à zéro des offsets, republication) est une nouvelle lecture.
@@ -150,15 +150,72 @@ Observations faites à la main sur `stats-service` démarré sur l'hôte contre 
 
 ### Non vérifié
 
-- Si la restauration vient du dossier d'état local ou du changelog.
+- Le cas avec dossier d'état local conservé : réutilisation des checkpoints, sans relecture du changelog (déduit du relevé du 23/11, non constaté dans un journal).
 - La cause exacte de l'absence de réponse pendant le démarrage (code HTTP non observé ; le contrôleur est censé répondre 503, non constaté).
 - Le rôle exact du cache (`commit.interval.ms`, taille du cache) dans la fusion des écritures.
 - Que le double comptage au rejeu se produirait aussi avec `exactly_once_v2`.
-- Si le store de déduplication est restauré depuis le disque local ou depuis son changelog (`stats-service-stats-dedup-store-changelog`).
 - Le cas hors rétention contre le broker réel (prouvé seulement par le test `unIdEvenementRejoueApresLaRetentionEstRecompte`).
+
+## 8 ter. Perte du dossier d'état local et redémarrage lent (24/11/2026)
+
+Relevés faits à la main sur `stats-service` démarré sur l'hôte contre le compose (broker 4.4.0). Les journaux `stats-demo.log`, `stats-demo2.log` et `stats-demo3.log` sont conservés localement, non versionnés.
+
+### A. Déduplication en direct
+
+**Constaté** (relevé de session, sans journal conservé) : après la republication d'un résultat, le topic `prelevements.resultats` contient pour `ADH-DEMO-01` trois messages : `d3e19fc6` à l'offset 0 (ancienne démonstration), `e0ae7c52` aux offsets 2 et 4 (le second est le doublon republié). `GET /stats` pour `ADH-DEMO-01` : `nombreAcceptes` 2, `nombreRejetes` 0, `montantTotal` 85.0, `dernierEvenement` 1795531858861 (2026-11-24 14:50:58,861 UTC, horodatage de la première décision ; le doublon n'a pas fait avancer cette valeur).
+
+**Non vérifié** : que `d3e19fc6` valait 42,50, ce que suppose le montant 85.0.
+
+### B. Perte du dossier d'état, changelog conservé
+
+**Protocole** : service arrêté ; groupe vérifié vide ; dossier d'état supprimé ; relance, avec le journal copié dans un fichier (`Tee-Object` écrit ici en UTF-16 : relire le journal avec `Select-String` ; un `grep` Unix ne trouve rien).
+
+```
+docker exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group stats-service --state
+Remove-Item -Recurse -Force stats-service/target/state-stores/stats-service
+Test-Path stats-service/target/state-stores/stats-service      # False
+mvn -pl stats-service spring-boot:run | Tee-Object -FilePath stats-demo3.log
+```
+
+Groupe avant la relance : « Consumer group 'stats-service' has no active members. », STATE `Empty`, #MEMBERS 0.
+
+**Constaté** (extraits de `stats-demo3.log`) :
+- Dossier recréé (`CreationTime` 17:11:02). « No process id found on disk, got fresh process id 859ac5c4-b46f-4ed7-8c13-fd87a3ca9f94 ».
+- CREATED to REBALANCING à 17:11:02,642 ; REBALANCING to RUNNING à 17:11:05,645 (3,0 s). Premier lancement de la série (16:11:46) : 1,9 s.
+- `HighAvailabilityTaskAssignor` : `activeTasks` 0_0, 0_1, 0_2, 1_0, 1_1, 1_2, `prevActiveTasks: ([])`, `changelogOffsetTotalsByTask: ([])`, `taskLagTotals: ([1_0=2, 1_1=4, 1_2=5])`.
+- Pour 1_0, 1_1, 1_2 et pour les deux stores : « State store stats-store (et stats-dedup-store) did not find checkpoint offset, hence would default to the starting offset at changelog stats-service-stats-store-changelog-N ».
+- Relecture depuis le début : « Seeking to offset 0 for partition stats-service-stats-dedup-store-changelog-N » ; pour `stats-store` : « Seeking to AutoOffsetResetStrategy{type=earliest} offset of partition stats-service-stats-store-changelog-N », puis « Resetting offset … FetchPosition{offset=0 ».
+- « Finished restoring changelog … to store stats-store with a total number of N records » : partitions 0, 1, 2 = 1, 2, 1. Pour `stats-dedup-store` : 1, 2, 4. Les lags annoncés sont la somme des deux changelogs par partition (1+1, 2+2, 4+1).
+- « Stateful active task 1_0 / 1_1 / 1_2 completed restoration » ; les tâches 0_0, 0_1, 0_2 sont sans état.
+- `GET /stats` après restauration : `ADH-CONNECT-01` 3 acceptés, 1 rejeté, 335.0 ; `ADH-CONNECT-02` 0, 1, 200.0 ; `ADH-DEMO-01` 2, 0, 85.0 (`dernierEvenement` 1795531858861). Mêmes comptes et montants que ceux relevés avant l'arrêt (partie A) ; `dernierEvenement` relevé avant l'arrêt pour `ADH-DEMO-01` seulement, identique.
+- Deux lignes `ERROR` « Failed to change permissions for the directory … » (`.\target\state-stores` et `.\target\state-stores\stats-service`) à 17:11:02,105 et 17:11:02,106, présentes aussi dans `stats-demo.log` et `stats-demo2.log` ; restauration aboutie ensuite ; aucun `WARN` dans les trois journaux.
+
+**Déduit** :
+- Les deux stores sont restaurés depuis leurs changelogs : aucun checkpoint local n'existait.
+- `stats-dedup-store` restaure 7 enregistrements, soit le nombre d'événements comptés (3+1, 0+1, 2+0) : le doublon n'y est pas entré deux fois.
+- Les lignes `ERROR` sont sans effet, pour la même cause qu'au §8 (permissions POSIX impossibles sur NTFS).
+
+**Non vérifié** : le cas avec dossier d'état conservé (réutilisation des checkpoints) ; le cas hors rétention ; `exactly_once_v2` ; la persistance de l'identifiant du client dans `kafka-streams-process-metadata` (pas de lancement témoin sans suppression).
+
+### C. Redémarrage lent après un arrêt sans départ du groupe
+
+**Constaté** (journal du broker, heures UTC du 24/11/2026, relevé par `docker logs kafka --since "2026-11-24T15:10:00Z" --until "2026-11-24T15:20:00Z" 2>&1 | Select-String -Pattern "stats-service"`) :
+- 15:11:46,924 : génération 18 stabilisée, 1 membre (1re instance).
+- 15:12:28,162 : la 2e instance rejoint ; « Preparing to rebalance group stats-service in state PreparingRebalance with old generation 18 (reason: Adding new member … ) ».
+- 15:12:55,713 : « Member stats-service-421625d8-… in group stats-service has failed, removing it from the group » ; 15:12:55,717 : « Stabilized group stats-service generation 19 with 1 members ». Attente de 27,55 s entre l'arrivée de la 2e instance et la stabilisation.
+- Dans ce relevé filtré (15:10 à 15:20 UTC), aucune ligne n'indique que la 1re instance ait quitté le groupe : elle est retirée comme « failed ».
+- La 2e instance est évincée à 15:13:40,718 (« has failed »), avec la raison « heartbeat expiration » à 15:13:40,741, soit 45,001 s après 15:12:55,717 ; 15:13:40,746 : « Group stats-service with generation 20 is now empty ».
+
+**Déduit** :
+- L'écart de 45 s correspond au `session.timeout.ms` par défaut du consommateur (45000 ms ; [documentation Kafka 4.0](https://kafka.apache.org/40/configuration/consumer-configs/)) et au fait que Kafka Streams n'envoie pas de `LeaveGroup` à la fermeture par défaut ([KIP-812](https://cwiki.apache.org/confluence/display/KAFKA/KIP-812:+Introduce+another+form+of+the+%60KafkaStreams.close()%60+API+that+forces+the+member+to+leave+the+consumer+group)).
+- La 2e instance a été arrêtée avant la fin de son démarrage : son journal s'arrête à 16:12:42 (heure locale) et ne contient aucune assignation pour la génération 19.
+
+**Non vérifié** : le code de `kafka-streams` 4.2.2 ; si l'arrêt de la 1re instance était un `close()` ou un arrêt brutal.
+
+**En pratique** : avant de relancer le service, attendre environ 45 s ou que le groupe soit à l'état `Empty` (première commande du protocole B).
 
 ## 9. Non vérifié, à faire
 
-1. Origine de la restauration : **partiellement prouvé**. L'état est restauré, probablement depuis le disque local (déduit, §8 bis). Pour trancher : arrêter le service, supprimer `stats-service/target/state-stores/stats-service` **en gardant le changelog**, redémarrer et comparer `GET /stats`.
-2. Validation en direct de la déduplication : **constatée** (§8 bis : un rejeu des offsets laisse 3/1/335.0 et 0/1/200.0, les topics internes et le nom du topic de repartitionnement sont constatés, la conversion de `7d` n'a pas posé de problème). Reste à vérifier : l'origine de la restauration du store de déduplication, et le cas hors rétention contre le broker réel.
+1. Restauration depuis le changelog en l'absence de dossier local : **constatée** (§8 ter B). **Non vérifié** : le cas avec dossier local conservé (réutilisation des checkpoints) ; le relevé du 23/11 laisse penser (déduit) qu'il est lu depuis le disque. À faire : arrêter le service, garder le dossier d'état, relancer, et lire dans le journal l'absence ou la présence de « did not find checkpoint offset ».
+2. Validation en direct de la déduplication : **constatée** (§8 bis : un rejeu des offsets laisse 3/1/335.0 et 0/1/200.0, les topics internes et le nom du topic de repartitionnement sont constatés, la conversion de `7d` n'a pas posé de problème). La restauration du store de déduplication depuis son changelog, sans dossier local, est constatée (§8 ter B). Reste à vérifier : le cas hors rétention contre le broker réel.
 3. `exactly_once_v2` : pour l'activer, `spring.kafka.streams.properties.processing.guarantee: exactly_once_v2` (broker 2.5 ou plus, doc Kafka 4.4 ; `commit.interval.ms` passerait à 100 par défaut). Question ouverte : les deux stores deviendraient atomiques (déduit). Cela ne remplace pas la déduplication.
