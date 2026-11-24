@@ -50,11 +50,6 @@
             <artifactId>micrometer-registry-prometheus</artifactId>
             <scope>runtime</scope>
         </dependency>
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <scope>runtime</scope>
-        </dependency>
         <!-- Driver Oracle : version gérée par le BOM de Spring Boot (oracle-database.version). -->
         <dependency>
             <groupId>com.oracle.database.jdbc</groupId>
