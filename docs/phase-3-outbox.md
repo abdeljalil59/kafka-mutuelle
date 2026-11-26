@@ -51,7 +51,7 @@ CREATE INDEX IF NOT EXISTS idx_outbox_a_envoyer ON outbox (envoye_le, cree_le, i
 ## 6. Relais
 - `relayer()` réserve au plus `taille-lot` événements (au plus un par clé, verrouillés jusqu'à la fin de la transaction du passage), puis pour chacun : `publier` (bloque jusqu'à l'accusé du broker, délai 10 s), **puis** `marquerEnvoye`.
 - **Arrêt sur échec** : la première exception remonte et le reste du lot n'est pas tenté ; l'ordre par clé est conservé, les événements déjà marqués le restent (**constaté**, `RelayerOutboxTest`, et `OutboxTransactionIntegrationTest` sur Oracle : la transaction est validée, `noRollbackFor`). `RelaiOutbox` journalise en WARN (`PublicationImpossibleException`) ou ERROR (autre `RuntimeException`), arrête la boucle de relance, et le planificateur continue (**constaté**, `RelaiOutboxTest`).
-- **Au moins une fois** : le marquage vient après l'accusé. Si le marquage échoue, l'événement reste « non envoyé » et est republié au passage suivant. **Constaté** (échec de marquage simulé) : 2 messages pour la clé, même partition (2), offsets 0 et 1, même `idEvenement`, même payload. **Depuis `e0b04f1`** : un plantage du processus avant la validation du passage republie tout le lot, et non plus seulement l'événement en cours (section 14.3, déduit).
+- **Au moins une fois** : le marquage vient après l'accusé. Si le marquage échoue, l'événement reste « non envoyé » et est republié au passage suivant. **Constaté** (échec de marquage simulé) : 2 messages pour la clé, même partition (2), offsets 0 et 1, même `idEvenement`, même payload. **Depuis `e0b04f1`** : un plantage du processus avant la validation du passage republie tout le lot, et non plus seulement l'événement en cours (section 14.3 ; constaté une fois pour un passage entièrement publié et non validé, section 14.7.1 ; plantage au milieu d'un passage : non exercé).
 - **Lien avec le consommateur** : `prelevement-service` déduplique sur `idEvenement` (clé primaire). Il lit un JSON sans en-tête de type (`spring.json.use.type.headers: false`, type par défaut `CotisationEmise`, **constaté** dans son `application.yml`). La lecture du payload de l'outbox par ce consommateur n'est **pas testée** de bout en bout par un test automatisé ; elle est **relevée** une fois en démonstration 3 (section 10).
 
 ## 7. Tests (`mvn -B test -pl cotisation-service -am`, 18/11 : `BUILD SUCCESS`, 39 tests, 11 pour `events-contract` ; 24/11/2026 : `BUILD SUCCESS`, 56 tests pour `cotisation-service`, 21 pour `events-contract` ; 26/11/2026 : `BUILD SUCCESS`, 71 tests pour `cotisation-service`, commande sans `-am`)
@@ -78,8 +78,8 @@ CREATE INDEX IF NOT EXISTS idx_outbox_a_envoyer ON outbox (envoye_le, cree_le, i
 | Format JSON | 4 propriétés ; `montant` à 50.00 ; `emiseLe` en chaîne ISO-8601 ; identique avec un `JsonMapper` nu et avec celui de Spring | | Autres réglages des deux mappers ; lecture par `prelevement-service` dans un test automatisé (relevée en démonstration 3, section 10) |
 | Transaction | Active via le cas d'usage, inactive en appel direct ; 2 lignes validées | | Rollback conjoint avec une table métier (inexistante) |
 | Relais | Le relais planifié publie puis marque ; arrêt du lot au premier échec ; `catch` et boucle de relance de `RelaiOutbox` (`RelaiOutboxTest`) | Latence max = `delai-relais-ms` + temps du lot | Relais sous charge prolongée (une démonstration de 10 000 événements : section 14.7) |
-| Au moins une fois | Doublon par échec de marquage simulé (mêmes `idEvenement` et payload) ; relevé en démonstration 3 : republication provoquée par un `UPDATE`, doublon ignoré par `prelevement-service` (relevé du 18/11 sur le code d'alors : le journal « doublon ignoré » n'existe plus, section 13) ; rejoué sur Oracle le 24/11/2026 : une seule ligne en base, un second résultat publié, compteur à 1 (section 13) | Un vrai plantage donne le même résultat | Vrai plantage de processus |
-| Multi-instance | `RelaisPlusieursInstancesTest` (2 tests sur Oracle 23.26.4) ; démonstration à deux instances sur Oracle 23.4.0.24.05 : 10 000 événements publiés une fois, ordre par clé conservé, aucune erreur Oracle (section 14.7) | Sans `SKIP LOCKED`, deux instances publieraient les mêmes lignes | Arrêt brutal d'une instance ; lot par défaut de 50 ; course entre les deux temps ; plusieurs brokers (section 14.10) |
+| Au moins une fois | Doublon par échec de marquage simulé (mêmes `idEvenement` et payload) ; relevé en démonstration 3 : republication provoquée par un `UPDATE`, doublon ignoré par `prelevement-service` (relevé du 18/11 sur le code d'alors : le journal « doublon ignoré » n'existe plus, section 13) ; rejoué sur Oracle le 24/11/2026 : une seule ligne en base, un second résultat publié, compteur à 1 (section 13) ; plantage réel (processus tué après la publication de son passage et avant la validation) : 5 doublons republiés par l'autre instance, un essai (26/11/2026, section 14.7.1) | Un plantage en cours de publication d'un passage laisse des doublons partiels | Plantage à d'autres instants du passage ; absorption des doublons par un consommateur après un plantage |
+| Multi-instance | `RelaisPlusieursInstancesTest` (2 tests sur Oracle 23.26.4) ; démonstration à deux instances sur Oracle 23.4.0.24.05 : 10 000 événements publiés une fois, ordre par clé conservé, aucune erreur Oracle (section 14.7) ; arrêt brutal d'une instance : 5 doublons, clés de la victime réservées par l'autre instance au plus 69 ms après l'arrêt et republiées en 111 ms au plus, un seul essai (section 14.7.1) | Sans `SKIP LOCKED`, deux instances publieraient les mêmes lignes | Libération des verrous avec connexion restée ouverte ; autres instants d'arrêt ; lot par défaut de 50 ; course entre les deux temps ; plusieurs brokers (section 14.10) |
 | Purge | | La table grossit | Purge des lignes envoyées |
 | Broker | Preuves automatisées sur le broker embarqué 4.2.2 ; publication vers le broker 4.4.0 du compose relevée en démonstrations 2 et 3 (section 10, 18/11) ; broker réellement arrêté puis rétabli (`docker stop kafka`, `docker start kafka`), relais rattrapant (section 13, 24/11/2026) | | |
 | Oracle | Conteneur 23.26.4 : `OutboxJdbcTest`, flux complet, transaction, doublon par échec de marquage (lancement 7, 56 tests verts) ; sonde du 24/11/2026 : `FETCH FIRST … FOR UPDATE SKIP LOCKED` accepté sur 23.26.4.0.0 (section 14.5) ; Oracle local 23.4.0.24.05 : démonstration en direct, 3 scénarios, types des colonnes et colonnes de l'index relevés (24/11/2026, section 13), `ORA-02014` pour cette forme (relevé de session, section 11), démonstration à deux instances sans erreur Oracle (26/11/2026, section 14.7) | | Oracle local : aucun test automatisé |
@@ -349,7 +349,7 @@ Conséquences :
 - **Constaté** (`OutboxTransactionIntegrationTest`) : au premier échec de publication (`PublicationImpossibleException`) ou de conversion (`IllegalArgumentException`), la transaction est **validée** (`noRollbackFor`) avant que l'exception remonte. Les événements déjà publiés et marqués le restent, les verrous des suivants sont libérés, et ils sont réservables au passage suivant.
 - **Verrous tenus pendant la publication** (lu dans le code) : une autre instance saute ces lignes pendant tout le passage.
 - **Pas de timeout de transaction** (décision, lue dans le code). **Déduit** : la durée d'un passage est bornée par le délai de publication par événement (`delai-publication-ms`, 10 s) multiplié par la taille du lot, soit jusqu'à environ 500 s au lot de 50 si chaque publication réussit juste avant son délai. Verrous et connexion de base de données sont tenus d'autant. **Non mesuré.**
-- **Fenêtre de doublons plus large** (déduit) : un plantage du processus **avant la validation** annule tout le passage, y compris les marquages des événements déjà publiés dans ce passage. Ils sont republiés (même `idEvenement`) au passage suivant. Avant ce changement, seul l'événement en cours pouvait l'être. Le consommateur doit donc être idempotent (section 6 : `prelevement-service` déduplique sur `idEvenement`, `impaye-service` aussi). **Non exercé** : aucun plantage réel n'a été provoqué.
+- **Fenêtre de doublons plus large** (déduit) : un plantage du processus **avant la validation** annule tout le passage, y compris les marquages des événements déjà publiés dans ce passage. Ils sont republiés (même `idEvenement`) au passage suivant. Avant ce changement, seul l'événement en cours pouvait l'être. Le consommateur doit donc être idempotent (section 6 : `prelevement-service` déduplique sur `idEvenement`, `impaye-service` aussi). **Constaté une fois** (section 14.7.1) : un processus tué après avoir publié les 5 événements de son passage et avant de le valider a laissé 5 doublons, republiés par l'autre instance. **Non exercé** : un plantage au milieu d'un passage (publications partielles).
 - Une exception autre (erreur SQL au marquage, par exemple) annule le passage. **Constaté** pour l'événement concerné : il est republié (`republie_l_evenement_quand_le_marquage_echoue_une_fois`, un seul événement dans ce test). **Déduit** : l'annulation des marquages précédents du même passage, qui découle de la transaction ; elle n'est pas testée avec plusieurs événements.
 
 ### 14.4 Boucle de relance
@@ -398,14 +398,57 @@ Scénarios : **A** 500 événements non envoyés sur 500 clés ; **B** 5 000 sur
 ### 14.7 Démonstration à deux instances (26/11/2026)
 **Relevé de session**, journaux temporaires supprimés après lecture.
 - **Montage (constaté)** : Oracle Database 23ai Free 23.4.0.24.05 local ; backlog de **10 000 événements insérés en SQL** (le chemin d'écriture de l'outbox, API REST et cas d'usage, n'est donc **pas** exercé), 20 clés `DEMO-01` à `DEMO-20`, `cree_le` croissant avec le numéro de l'événement, topic dédié de 3 partitions. Deux instances de `cotisation-service` sur la même machine et la même base : ports 8081 (A) et 8091 (B), `taille-lot=5`, `delai-relais-ms=2000`, `passages-max` par défaut (100). Le lot par défaut (50) n'a **pas** été exercé : avec 50 têtes de clé ou moins, une seule instance réserve tout (déduit, section 14.2).
-- **Version du code (déduit des journaux, non contrôlé par une sortie conservée)** : 1 200 passages en 153 s avec un délai de 2 s ne sont possibles qu'avec la boucle de `f383fd5` ; zéro doublon avec deux instances n'est possible qu'avec la réservation de `acc5d5d`.
+- **Version du code** : **constaté** (26/11/2026, contrôlé après coup) : le jar `cotisation-service-0.1.0-SNAPSHOT.jar` date de 09:46:17, après le commit `f383fd5` (09:26:24) ; `git diff --stat f383fd5 HEAD -- cotisation-service/src` ne renvoie rien ; le jar contient la propriété `passages-max` et les classes du relais. **Déduit** : c'est ce jar qui a servi à la démonstration de 09:48 (aucune sortie ne relie le jar au processus lancé) ; les journaux concordent (1 200 passages en 153 s avec un délai de 2 s ne sont possibles qu'avec la boucle de `f383fd5`).
 - **Journaux (constaté)** : A, 1 200 lignes `outbox : n événement(s) publié(s)`, 6 000 événements, de 09:48:53,689 à 09:51:26,547 ; B, 800 lignes, 4 000 événements, de 09:49:50,159 à 09:51:26,580 (heure locale +01:00). Total : 10 000. Chaque ligne indique 5 événements (aucun passage partiel). B a publié pour la première fois environ 56 s après A ; recouvrement d'environ 96 s.
 - **Base après coup (constaté)** : 10 000 lignes envoyées, 0 non envoyée.
 - **Topic (constaté)** : somme des offsets de fin = 10 000 exactement, donc aucun doublon (le producteur n'est pas transactionnel, aucun marqueur de transaction ne s'ajoute aux offsets).
 - **Ordre (constaté)** : 20 clés, 500 messages chacune, ordre croissant. Pour la clé `DEMO-k`, le premier événement est k et le dernier 9 980 + k (lecture brute du topic avec `kafka-console-consumer`, identifiant lu dans les octets du message).
 - **Journaux d'application (constaté)** : aucune ligne `ORA-`, `ERROR` ni `WARN`, donc aucun `ORA-02014` : le code Java de production fonctionne sur 23.4.0.24.05 avec deux relais concurrents.
 - **Verdict** : concluant, selon un critère fixé avant l'exécution (les deux instances publient, la première publication de B précède la dernière de A, comptes et ordre conformes, aucune erreur Oracle).
-- **Non exercé** : lot par défaut de 50 ; arrêt brutal d'une instance (délai de libération des verrous, doublons) ; chemin d'écriture de l'outbox ; course entre les deux temps de la réservation (déduit, non testé) ; broker multiple ; relecture des valeurs Avro par un consommateur (`kafka-avro-console-consumer` a échoué avec `Unknown magic byte!` ; **non vérifié** : cause probable, la clé de type chaîne décodée comme de l'Avro).
+- **Non exercé** : lot par défaut de 50 ; chemin d'écriture de l'outbox ; course entre les deux temps de la réservation (déduit, non testé) ; broker multiple ; relecture des valeurs Avro par un consommateur (`kafka-avro-console-consumer` a échoué avec `Unknown magic byte!` ; **non vérifié** : cause probable, la clé de type chaîne décodée comme de l'Avro).
+
+### 14.7.1 Arrêt brutal d'une instance (26/11/2026)
+**Relevé de session**, journaux temporaires supprimés après lecture (copies conservées localement par l'auteur, non versées au dépôt).
+
+**Protocole** : même montage que 14.7 (Oracle 23.4.0.24.05 local, deux instances sur 8081 et 8091, `taille-lot=5`, `delai-relais-ms=2000`, topic dédié de 3 partitions, 20 clés). Les deux instances démarrent **à vide** ; on insère ensuite 5 000 événements en SQL (de 14:04:14,582 à 14:04:15,016) ; B est tué par `Stop-Process -Id $pidB -Force`, où `$pidB` est le PID du processus qui écoute sur 8091 (vérifié : `java`), à la 150ᵉ ligne `outbox : 5` de son journal plus un délai aléatoire de 0 à 120 ms. Critère fixé avant l'exécution : *concluant* si au moins un doublon (somme des offsets entre 5 001 et 5 005), 0 ligne non envoyée et aucune erreur dans le journal de A.
+
+**Premier essai invalide** : B n'a jamais démarré (`ORA-00054` sur le `CREATE INDEX IF NOT EXISTS` de `schema.sql`, à 13:49:21,399, pendant que A relayait déjà). A a publié seule les 5 000 événements. Cet essai n'apporte aucune observation sur l'arrêt brutal ; il a conduit au démarrage à vide (voir 14.9). Les résultats ci-dessous sont ceux du **seul essai valide**.
+
+**Constaté**
+- Base : 5 000 lignes, 5 000 envoyées, 0 non envoyée. Journaux : A 850 lignes (4 250 événements), B 150 lignes (750 événements), total 5 000 ; aucune ligne `ORA-`, `ERROR` ni `WARN`. Le journal de B s'arrête sur une ligne ordinaire (14:04:34,184), sans arrêt propre.
+- Offsets de fin du topic : 1501 + 1752 + 1752 = **5 005**, soit 5 doublons.
+- Arrêt de B : instant relevé juste avant l'appel à `Stop-Process` : 14:04:34,253 (1795698274253 ms depuis l'epoch). L'arrêt effectif est postérieur de quelques millisecondes (non mesuré) ; le majorant de 69 ms reste valable.
+
+| Événement | Clé | Première copie (par rapport à l'arrêt) | Seconde copie (par rapport à l'arrêt) |
+|---|---|---|---|
+| 1541 | DEMO-01 | −50 ms | +69 ms |
+| 1542 | DEMO-02 | −39 ms | +82 ms |
+| 1543 | DEMO-03 | −28 ms | +92 ms |
+| 1544 | DEMO-04 | −20 ms | +102 ms |
+| 1545 | DEMO-05 | −7 ms | +111 ms |
+
+(horodatages `CreateTime` des messages du topic ; écarts calculés par rapport à l'instant relevé juste avant l'arrêt)
+- **Ordre par clé** : les 20 clés sont en ordre croissant au sens large. `DEMO-01` à `DEMO-05` ont 251 messages avec une répétition, **adjacente** ; les 15 autres clés ont 250 messages sans répétition.
+- **Chronologie** (26/11/2026, 14:04, +01:00 ; sources : journal de B, horodatages du topic, colonne `envoye_le`). B publie et valide des passes de 5 événements toutes les 83 ms (lignes de journal à 34,018, 34,101 et 34,184). Première copie des 5 doublons de 34,203 à 34,246. Arrêt de B à 34,253. Les événements 1546 à 1550 (clés `DEMO-06` à `DEMO-10`) sont marqués envoyés de 34,243 à 34,291. Seconde copie des doublons de 34,322 à 34,364. Les événements 1541 à 1545 sont marqués envoyés de 34,332 à 34,372.
+
+**Verdicts**
+1. *Libération des verrous* : **concluant**. A avait **réservé** les 5 clés de B au plus **69 ms** après l'arrêt (majorant, déduit : la réservation précède la première republication, à +69 ms). La republication complète se termine à +111 ms.
+2. *Doublons* : **concluant**. 5 doublons, soit `taille-lot` (le maximum attendu), de même `idEvenement` que des événements publiés par B et non validés.
+3. *Ordre par clé* : **concluant**. Croissant au sens large malgré les doublons.
+
+**Déduit**
+- La dernière passe de B avait publié ses 5 événements (première copie) et n'en avait validé aucun : le processus a été tué entre la dernière publication (34,246) et la validation, que la période de 83 ms place vers 34,267. La passe entière a été annulée, puis republiée par A.
+- Les événements 1546 à 1550 sont marqués d'un seul tenant (une dizaine de millisecondes d'écart) et la dernière marque suit l'arrêt de B : c'est donc une passe de A. Elle a commencé avant l'arrêt (34,243) et a réservé d'autres clés que celles de B : A a sauté les lignes verrouillées par B sans attendre.
+- Les 69 ms **ne sont pas une mesure d'Oracle** : c'est un majorant, qui dépend de la période des passes de A (environ 83 ms). La libération a eu lieu entre l'arrêt et le début de la passe de A qui a obtenu ces clés. Le serveur a probablement détecté la fermeture des connexions du processus tué aussitôt, mais le relevé ne le distingue pas.
+- C'est le **meilleur cas** : le processus a été tué sur la même machine que la base, donc la fermeture des connexions est immédiate.
+
+**Non vérifié**
+- Un seul essai concluant et un seul instant d'arrêt (lot publié, non validé) ; d'autres instants de la passe n'ont pas été exercés.
+- Libération quand la connexion **reste ouverte** (panne réseau, machine gelée) : le délai peut être très supérieur.
+- Mesure directe des sessions Oracle : impossible, `ORA-00942` sur `v$session` pour l'utilisateur de l'application.
+- **Absorption des doublons par des consommateurs idempotents** : non exercée dans cet essai. Aucun consommateur applicatif n'était configuré sur ce topic de démonstration (aucune mention de `cotisations.demo-relais` dans les `application.yml` ni dans le code des services).
+- La requête des plus grands écarts d'`envoye_le` par clé (environ 2,4 s sur plusieurs clés, tous terminés vers 14:04:17) **n'est pas retenue** : non expliquée, sans rapport avec l'arrêt.
+- A a ensuite été arrêtée par `Stop-Process` sans `-Force`, au repos, avec 0 ligne non envoyée : ce n'est pas un arrêt propre (le service n'expose pas d'endpoint d'arrêt et le processus n'avait pas de console). Sans effet sur les comptes.
 
 ### 14.8 Reproduire la démonstration
 Sous PowerShell, depuis la racine du dépôt, avec `kafka` et `schema-registry` du compose. Les commandes `sqlplus` utilisent les valeurs de développement de l'`application.yml`.
@@ -486,6 +529,72 @@ curl.exe -s -X DELETE "http://localhost:8082/subjects/cotisations.demo-relais-va
 ```
 Après le nettoyage, la table `outbox` est revenue à 1 ligne, dont 0 non envoyée.
 
+#### 14.8.1 Variante : arrêt brutal d'une instance (essai valide du 26/11/2026)
+Commandes de l'essai de 14.7.1, telles qu'elles ont été exécutées (relevées dans la session de travail ; seuls les chemins de sortie des fichiers du topic sont remplacés par `$env:TEMP`). Préparation, topic et nettoyage : comme ci-dessus (le backlog n'est **pas** inséré avant le démarrage, et la table `outbox` ne doit contenir aucune ligne non envoyée). Les instances sont démarrées **à vide**, car démarrer une instance pendant que l'autre relaie un backlog peut échouer (section 14.9).
+
+Démarrage de A, puis attente de `Started` :
+```powershell
+$jar = "cotisation-service/target/cotisation-service-0.1.0-SNAPSHOT.jar"
+$pa = Start-Process java -ArgumentList "-jar",$jar,"--server.port=8081","--mutuelle.cotisation.outbox.taille-lot=5","--mutuelle.cotisation.outbox.delai-relais-ms=2000","--logging.file.name=$env:TEMP\demo-relais-A.log" -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\demo-relais-A.out"
+```
+```powershell
+for ($i=0; $i -lt 60; $i++) { if (Select-String -Path "$env:TEMP\demo-relais-A.log" -Encoding utf8 -Pattern 'Started CotisationServiceApplication' -Quiet) { "A Started"; break }; Start-Sleep -Seconds 1 }
+```
+Démarrage de B, puis attente de `Started` :
+```powershell
+$pb = Start-Process java -ArgumentList "-jar",$jar,"--server.port=8091","--mutuelle.cotisation.outbox.taille-lot=5","--mutuelle.cotisation.outbox.delai-relais-ms=2000","--logging.file.name=$env:TEMP\demo-relais-B.log" -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\demo-relais-B.out"
+```
+```powershell
+for ($i=0; $i -lt 90; $i++) { if ((Test-Path "$env:TEMP\demo-relais-B.log") -and (Select-String -Path "$env:TEMP\demo-relais-B.log" -Encoding utf8 -Pattern 'Started CotisationServiceApplication' -Quiet)) { "B Started apres $i s"; break }; if ($pb.HasExited) { "B termine"; break }; Start-Sleep -Seconds 1 }
+```
+Insertion des 5 000 événements, puis arrêt brutal de B (le script de l'essai, en un seul bloc) :
+```powershell
+$c = "kafka_mutuelle/kafka_mutuelle@localhost:1522/freepdb1"
+$ti = [DateTimeOffset]::Now
+@("INSERT INTO outbox (id_evenement, topic, cle, payload, cree_le) SELECT id, 'cotisations.demo-relais', cle, JSON_OBJECT('idEvenement' VALUE id, 'idAdherent' VALUE cle, 'montant' VALUE 10.00, 'emiseLe' VALUE '2026-11-25T10:00:00Z'), TIMESTAMP '2026-11-25 00:00:00' + NUMTODSINTERVAL(n, 'SECOND') FROM (SELECT LEVEL AS n, 'dddddddd-0000-0000-0000-' || LPAD(LEVEL, 12, '0') AS id, 'DEMO-' || LPAD(MOD(LEVEL - 1, 20) + 1, 2, '0') AS cle FROM dual CONNECT BY LEVEL <= 5000);", "COMMIT;") | sqlplus -s $c
+$lb = "$env:TEMP\demo-relais-B.log"; $deadline = (Get-Date).AddMinutes(3)
+while (@(Select-String -Path $lb -Encoding utf8 -Pattern 'outbox : 5 ').Count -lt 3) { if ((Get-Date) -gt $deadline) { "ANOMALIE: pas de lignes outbox:5 dans B en 3 min"; return }; Start-Sleep -Milliseconds 100 }
+$pidB = (Get-NetTCPConnection -LocalPort 8091 -State Listen).OwningProcess; Get-Process -Id $pidB | Select-Object Id, ProcessName, StartTime | Format-List
+if (Select-String -Path "$env:TEMP\demo-relais-A.log",$lb -Encoding utf8 -Pattern 'ORA-| ERROR ' -Quiet) { "ERREUR dans un journal: pas d'arret brutal"; return }
+while (@(Select-String -Path $lb -Encoding utf8 -Pattern 'outbox : 5 ').Count -lt 150) { if ((Get-Date) -gt $deadline) { "ANOMALIE: 150 lignes non atteintes en 3 min"; return }; Start-Sleep -Milliseconds 20 }
+Start-Sleep -Milliseconds (Get-Random -Maximum 120); $tk = [DateTimeOffset]::Now; Stop-Process -Id $pidB -Force
+"tk local = " + $tk.ToString("yyyy-MM-ddTHH:mm:ss.fffzzz"); "tk epoch ms = " + $tk.ToUnixTimeMilliseconds()
+$tk.ToUnixTimeMilliseconds() | Out-File "$env:TEMP\demo-relais-tk.txt"; $ti.ToUnixTimeMilliseconds() | Out-File "$env:TEMP\demo-relais-ti.txt"
+```
+Fin du backlog (relancé toutes les cinq secondes jusqu'à 0, au plus dix minutes) :
+```powershell
+$t0 = Get-Date; while (((Get-Date) - $t0).TotalMinutes -lt 10) { $n = [int](((@("SET HEADING OFF FEEDBACK OFF", "SELECT COUNT(*) - COUNT(envoye_le) FROM outbox WHERE topic = 'cotisations.demo-relais';") | sqlplus -s $c) -join "").Trim()); "{0} non_envoyees={1}" -f (Get-Date -Format "HH:mm:ss.fff"), $n; if ($n -eq 0) { break }; Start-Sleep -Seconds 5 }
+```
+Somme des offsets (attendu : entre 5 001 et 5 005 si l'arrêt a eu lieu en plein passage ; 5 000 : essai non concluant) :
+```powershell
+docker exec kafka /opt/kafka/bin/kafka-get-offsets.sh --bootstrap-server localhost:9092 --topic cotisations.demo-relais | ForEach-Object { [int]($_ -split ':')[2] } | Measure-Object -Sum | Format-List Count, Sum
+```
+Comptes par instance et erreurs : mêmes commandes que ci-dessus. Lectures du topic, sans puis avec horodatage des messages :
+```powershell
+docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic cotisations.demo-relais --from-beginning --timeout-ms 30000 --consumer-property enable.auto.commit=false --property print.key=true --property key.separator=";" 2>$null | Out-File -Encoding utf8 $env:TEMP\demo-relais-topic.txt
+```
+```powershell
+docker exec kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic cotisations.demo-relais --from-beginning --timeout-ms 30000 --consumer-property enable.auto.commit=false --property print.timestamp=true --property print.key=true --property key.separator=";" 2>$null | Out-File -Encoding utf8 $env:TEMP\demo-relais-topic-ts.txt
+```
+Doublons (les `idEvenement` présents plusieurs fois) :
+```powershell
+Get-Content $env:TEMP\demo-relais-topic.txt | Where-Object { $_ -match '^(DEMO-\d\d);.*dddddddd-0000-0000-0000-(\d{12})' } | ForEach-Object { [pscustomobject]@{ Cle = $Matches[1]; N = [int]$Matches[2] } } | Group-Object N | Where-Object { $_.Count -gt 1 } | ForEach-Object { [pscustomobject]@{ N = $_.Name; Fois = $_.Count; Cle = $_.Group[0].Cle } } | Format-Table -AutoSize
+```
+Horodatages des deux copies par rapport à l'arrêt (`$tkms` est l'instant d'arrêt en millisecondes, écrit dans `demo-relais-tk.txt`) :
+```powershell
+$tkms = [long](Get-Content "$env:TEMP\demo-relais-tk.txt")
+Get-Content $env:TEMP\demo-relais-topic-ts.txt | Where-Object { $_ -match 'CreateTime:(\d+).*?(DEMO-\d\d).*?dddddddd-0000-0000-0000-(\d{12})' } | ForEach-Object { [pscustomobject]@{ Ts = [long]$Matches[1]; Cle = $Matches[2]; N = [int]$Matches[3] } } | Group-Object N | Where-Object { $_.Count -gt 1 } | ForEach-Object { $ts = @($_.Group.Ts | Sort-Object); [pscustomobject]@{ N = $_.Name; Cle = $_.Group[0].Cle; PremiereAvantArret_ms = $ts[0] - $tkms; SecondeApresArret_ms = $ts[-1] - $tkms } } | Format-Table -AutoSize
+```
+Ordre par clé, avec le nombre de répétitions (attendu : `Croissant` = `True` partout, `Messages` = 250 plus les doublons de la clé) :
+```powershell
+Get-Content $env:TEMP\demo-relais-topic.txt | Where-Object { $_ -match '^(DEMO-\d\d);.*dddddddd-0000-0000-0000-(\d{12})' } | ForEach-Object { [pscustomobject]@{ Cle = $Matches[1]; N = [int]$Matches[2] } } | Group-Object Cle | ForEach-Object { $ns = @($_.Group.N); $rep = 0; for ($i = 1; $i -lt $ns.Count; $i++) { if ($ns[$i] -eq $ns[$i - 1]) { $rep++ } }; [pscustomobject]@{ Cle = $_.Name; Messages = $ns.Count; Repetitions = $rep; Croissant = (($ns -join ',') -eq (($ns | Sort-Object) -join ',')); Premier = $ns[0]; Dernier = $ns[-1] } } | Format-Table -AutoSize
+```
+Chronologie des marques d'envoi autour de l'arrêt (lecture seule) :
+```powershell
+@("SET LINESIZE 200", "ALTER SESSION SET NLS_TIMESTAMP_FORMAT = 'HH24:MI:SS.FF3';", "SELECT n, cle, envoye_le FROM (SELECT TO_NUMBER(SUBSTR(id_evenement, 25)) AS n, cle, envoye_le FROM outbox WHERE topic = 'cotisations.demo-relais' AND id_evenement LIKE 'dddddddd-%') WHERE n BETWEEN 1536 AND 1550 ORDER BY n;") | sqlplus -s $c
+```
+Arrêt de A : `Stop-Process -Id $pidA`, avec `$pidA = (Get-NetTCPConnection -LocalPort 8081 -State Listen).OwningProcess` (le service n'expose pas d'endpoint d'arrêt).
+
 ### 14.9 Limites
 - **Un événement en tête qui ne se convertit pas bloque le relais** (constaté par lecture : la boucle de `RelayerOutbox.relayer()`, sans `try/catch` ; l'`IllegalArgumentException` de `ConvertisseurAvro` est levée hors du `try` de `PublicationCotisationKafka`). Il est réessayé à chaque passage et empêche les suivants de son lot ; aucune quarantaine n'existe. **Déduit, non exercé** : avec plusieurs instances, le blocage n'est pas strictement total. Une instance qui saute la ligne verrouillée par une autre peut publier des événements plus récents pendant ce court passage ; chaque instance qui réserve l'événement empoisonné échoue.
 - **L'ordre repose sur l'horloge de l'application** (`cree_le` = `emiseLe`, sections 8 et 9) : deux transactions concurrentes d'un même adhérent peuvent être validées dans l'ordre inverse (déduit, non exercé). Plusieurs instances du service ne changent pas cela.
@@ -493,9 +602,14 @@ Après le nettoyage, la table `outbox` est revenue à 1 ligne, dont 0 non envoy�
 - **Course entre les deux temps** (déduit, non testé) : un candidat lu au temps 1 peut avoir été marqué envoyé par une autre instance avant le temps 2. La condition `envoye_le IS NULL` du temps 2 l'écarte : il est alors simplement non obtenu.
 - **Verrous tenus pendant la publication, pas de timeout de transaction, fenêtre de doublons élargie** : section 14.3.
 - **Un passage coûte environ un aller-retour par ligne obtenue ou sautée** (constaté, section 14.6).
+- **Démarrer une instance pendant qu'une autre relaie peut échouer** : `ORA-00054` sur le `CREATE INDEX IF NOT EXISTS idx_outbox_a_envoyer` de `schema.sql`, exécuté à chaque démarrage, quand l'autre instance tient des verrous sur `outbox`. **Constaté une fois** (13:49:21,399, section 14.7.1) ; la cause (le DDL exige un verrou de table que les verrous de lignes de l'autre instance l'empêchent d'obtenir, et échoue aussitôt : `ORA-00054` signifie « ressource occupée, verrou non obtenu ») est **déduite**. L'échec n'est pas systématique : la démonstration de 14.7 a démarré B pendant que A relayait (B a publié pour la première fois environ 56 s après A) sans échec, sans doute pendant une pause entre deux passages (déduit). Pas de correction dans ce lot ; l'essai valide de 14.7.1 a démarré les deux instances à vide.
 
 ### 14.10 Ce qui reste non vérifié
-- Arrêt brutal d'une instance : délai de libération des verrous, doublons produits.
+- Libération des verrous quand la connexion reste ouverte (panne réseau ou machine gelée).
+- Arrêts à d'autres moments de la passe (avant toute publication, au milieu, pendant la validation).
+- Répétabilité de l'arrêt brutal (un seul essai concluant).
+- Absorption des doublons par des consommateurs idempotents après un arrêt brutal (aucun consommateur n'était configuré sur le topic de démonstration).
+- Fréquence du `ORA-00054` au démarrage d'une instance pendant qu'une autre relaie.
 - Lot par défaut de 50 avec deux instances.
 - Plusieurs brokers.
 - Chemin d'écriture de l'outbox avec plusieurs instances.
