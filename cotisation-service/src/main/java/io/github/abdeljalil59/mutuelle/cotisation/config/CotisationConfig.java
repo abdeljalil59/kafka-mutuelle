@@ -64,7 +64,8 @@ public class CotisationConfig {
 
     @Bean
     @ConditionalOnProperty(name = "mutuelle.cotisation.outbox.relais-actif", havingValue = "true", matchIfMissing = true)
-    RelaiOutbox relaiOutbox(RelayerOutbox relayerOutbox) {
-        return new RelaiOutbox(relayerOutbox);
+    RelaiOutbox relaiOutbox(RelayerOutbox relayerOutbox,
+                            @Value("${mutuelle.cotisation.outbox.passages-max}") int passagesMax) {
+        return new RelaiOutbox(relayerOutbox, passagesMax);
     }
 }

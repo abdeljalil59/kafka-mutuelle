@@ -45,6 +45,10 @@ mutuelle:
       # Pause entre deux passages du relais (fixedDelay). Limite connue : un événement enregistré
       # n'est publié qu'au passage suivant, soit jusqu'à ce délai plus le temps de publier le lot.
       delai-relais-ms: 10000
+      # Passages enchaînés par déclenchement : le relais se relance tant qu'un passage a réservé au moins un
+      # événement (un passage ne publie qu'une tête par clé), au plus passages-max fois ; le déclenchement suivant
+      # reprend après delai-relais-ms.
+      passages-max: 100
       taille-lot: 50
 
 server:
